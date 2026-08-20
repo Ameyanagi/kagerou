@@ -36,12 +36,14 @@ constructors so floating overflow raises instead of escaping as nonfinite state.
 
 Affine inversion decomposes each finite binary64 coefficient into its exact
 integer significand and base-two exponent. Products are formed exactly in
-`Int256`; terms are aligned exactly whenever cancellation is possible, and a
-term separated by more than the retained 149-bit window cannot affect zero
-classification or a binary64 result. Only an exact zero determinant is
-singular. Inverse coefficients apply their exponents in binary64-sized steps,
-and inverse translation uses the same exact-product accumulation so finite
-cancellation cannot be lost to intermediate overflow. Any nonzero result that
-would underflow, or any result that would overflow, is rejected as
+`Int256`; terms are aligned exactly whenever cancellation is possible. A term
+separated by more than the retained 149-bit window cannot affect exact-zero
+classification and lies below the retained working precision, but it can still
+decide a binary64 halfway-rounding case by one ulp. K0.3 therefore does not
+promise correctly rounded inverse coefficients. Only an exact zero determinant
+is singular. Inverse coefficients apply their exponents in binary64-sized
+steps, and inverse translation uses the same exact-product accumulation so
+finite cancellation cannot be lost to intermediate overflow. Any nonzero result
+that would underflow, or any result that would overflow, is rejected as
 nonrepresentable. Approximate geometry and near-singular tolerance remain owned
 by the unopened K0.4 gate.
