@@ -17,6 +17,11 @@ Kagerou must never depend on Sen. A GPU implementation may consume the same
 semantic inputs after v0.1, but no GPU resource, device, shader, or error enters
 the CPU API.
 
+Kagerou is also not the owner of a general render plan. Sen and other callers
+retain their own command ordering and lower it immediately through Kagerou's
+concrete fill/stroke operations. Kagerou does not publish a command batch,
+retained scene, or renderer trait in v0.1.
+
 ## Primary-source ledger
 
 The research clones live outside the Kagerou repository at
@@ -115,14 +120,16 @@ and [Apache-2.0](https://github.com/linebender/vello/blob/f08b480a77bf91f37adec5
 - kurbo's drawing-element/segment distinction becomes builder commands at the
   public boundary and derived segment iteration internally. Raw mutable element
   access is not adopted because Mojo 1.0 cannot rely on underscore privacy.
-- Vello's semantic recording/backend split is retained as a future seam, but a
-  retained public scene and its resource model are unnecessary for v0.1.
+- Vello's separation between semantic draw inputs and backend execution is
+  retained, but Kagerou adapts those inputs immediately. Its retained recording,
+  public scene, and resource model are unnecessary here.
 
 ### Reject for v0.1
 
 - Conics, arcs, path Boolean operations, hit testing, general shape protocols,
   per-vertex attributes, triangle tessellation, gradients, images, text,
-  filters, arbitrary blend modes, layers, caching, and retained scenes.
+  filters, arbitrary blend modes, layers, caching, retained scenes, command
+  batches, and a renderer trait.
 - A GPU-first pipeline, shaders, atlases, device selection, asynchronous
   submission, GPU target handles, or GPU errors in the core package.
 - Window creation, event handling, widgets, plotting semantics, and export
@@ -147,7 +154,7 @@ scalar software pipeline
 edge preparation -> clipped coverage -> solid paint -> source-over
                               |
                               v
-checked SoftwareSurface (owned premultiplied RGBA8)
+checked SoftwareSurface (owned linear-light premultiplied UNORM8 RGBA)
 
 future, after v0.1 conformance:
 same semantic draw input -> isolated GPU encoder/renderer -> GPU target
@@ -179,6 +186,11 @@ No public type in one layer exposes the internal storage of the layer below it.
   contract. Lowering never changes composition order implicitly.
 - Every coordinate, transform coefficient, style scalar, and tolerance must be
   finite when observed. Operation overflow raises.
+- A finite singular transform is valid for fill, stroke, clip, and path
+  lowering; collapsed geometry follows the same fill/stroke rules. Only an
+  operation that mathematically requires inversion, such as `inverted()`, raises
+  for exact singularity. CPU and future GPU rendering may not choose different
+  singular-transform policies.
 
 ### Commands and contours
 
@@ -282,73 +294,200 @@ even-odd.
 
 A dash sequence contains positive finite lengths, has a positive finite cycle,
 and is normalized to an even on/off cycle by repeating an odd-length input once.
-Empty means solid. Dash offset normalization is deterministic. Dashed closed
-contours define the seam explicitly; implementations cannot reorder dashes if
-that changes observable output.
+Empty means solid. The offset is reduced into `[0, cycle)` in source units; an
+offset exactly on an interval boundary advances to the following interval.
+Traversal begins at the stored first point and follows path order. Zero-length
+segments consume no dash length and do not reset phase. A closed contour is
+never rotated to find a more convenient seam. When the first and last pieces are
+both on, they merge across the stored seam and receive a join there; otherwise
+each on piece ending at the seam receives the selected caps. Dashing and any
+curve-length approximation are deterministic source-space geometry lowering
+under the same device-space tolerance and segment budget.
+
+The miter ratio is the source-space distance from the join vertex to the outer
+offset-line intersection divided by half the stroke width. A finite intersection
+with ratio less than or equal to the miter limit uses the miter; equality is
+included. A missing/nonrepresentable intersection, larger ratio, exact reversal,
+or cusp falls back to bevel for a miter join. A round join uses the outer arc;
+a bevel join uses the two outer offset endpoints.
+
+Zero-length geometry has fixed behavior. Zero-length segments inside a subpath
+are skipped when finding neighboring tangents and joins. An open subpath with no
+nonzero segment produces nothing for butt caps, a source-space disk of radius
+half-width for round caps, and a source-axis-aligned square of side `width` for
+square caps. A closed subpath with no nonzero segment produces no stroke because
+closed contours have no caps. At an exact reversal, round joins add the
+half-width disk and bevel/miter joins use the bevel fallback. These rules apply
+before transformation and therefore remain defined under nonuniform or singular
+transforms.
 
 Stroke expansion returns fillable closed outlines. It documents approximation
-limits, covers cusps and degenerate segments, and uses the same explicit
-tolerance/complexity budget. Style mutation is revalidated at every public use.
+limits and uses the same explicit tolerance/complexity budget. Style mutation is
+revalidated at every public use.
 
 ### Clip ownership
 
-v0.1 clips are intersect-only. A `ClipStack` owns immutable entries, each of
-which captures a path, fill rule, and transform at insertion. Pushing a clip
-does not change the renderer's transform. Nested clips intersect coverage;
-there is no union, difference, luminance mask, opacity layer, or blend layer.
+v0.1 clips are intersect-only. A caller-local `ClipStack` owns immutable entries,
+each of which captures a path, fill rule, and transform at insertion. `push()`
+mutates this checked local value and returns no retained scope object; `pop()`
+raises when empty. Pushing a clip does not change any renderer transform. Nested
+clips intersect coverage; there is no union, difference, luminance mask, opacity
+layer, or blend layer.
 
-`push()` returns a balanced scope/token or `pop()` validates nonempty state.
-Rendering rejects mutated/unbalanced state before touching the surface. The
-software implementation may cache an internal 8-bit coverage mask, but mask
-representation and caching are not public API.
+Each immediate fill/stroke call borrows one validated clip-stack snapshot for
+the duration of the synchronous call. It neither retains nor mutates that stack.
+Rendering rejects externally mutated or structurally incoherent clip storage
+before touching the surface. Adapter-level completion separately requires the
+local stack to be empty. The software implementation may derive a temporary
+64-sample mask, but mask representation and caching are not public API.
 
 ## Software surface and raster pipeline
 
 ### Surface contract
 
-`SoftwareSurface(width, height)` owns tightly packed premultiplied RGBA8 bytes.
+`SoftwareSurface(width, height)` freezes one format before K3.1:
+
+- rows are stored top to bottom with no padding;
+- stride is exactly `width * 4` bytes;
+- each row stores pixels left to right in byte order `R, G, B, A`;
+- every channel is linear-light UNORM8, decoded as `byte / 255.0`;
+- RGB is premultiplied by alpha, so every stored pixel satisfies
+  `R <= A`, `G <= A`, and `B <= A`;
+- alpha zero has the sole representation `(0, 0, 0, 0)`; and
+- construction initializes every pixel to transparent black.
+
 v0.1 rejects zero dimensions. Construction checks `width * height * 4`, integer
 conversion, stride, and allocation limits before allocation. Borrowed surface
 views, custom strides, alternate formats, and image decoding/encoding wait for
-later evidence.
+later evidence. This linear byte format is the scalar rendering and golden-file
+ABI; it is not implicitly sRGB and export code must label or convert it.
+
+The byte conversion rule is round-to-nearest, ties-to-even after clamping an
+already finite premultiplied linear channel to `[0, 1]`. Decoding is the named
+`byte / 255.0` operation in Float64. An affected pixel is quantized exactly once
+at the end of each successful immediate draw. Source-over for repeated draws
+therefore decodes the stored destination, composites in linear Float64 using the
+locked operation order below, and requantizes once. No backend may reinterpret
+the bytes through an sRGB transfer function.
 
 Checked access exposes dimensions, immutable pixel observation, clear, and
-eventually explicit export-copy access. No public mutable byte slice can break
-premultiplication or length invariants. The surface is move-only unless a
-deliberate deep-copy API is added. Every draw guarantees writes stay within its
-owned allocation, including negative/huge path coordinates and clips.
+eventually explicit export-copy access. `SoftwareSurface` stores pixels behind a
+package-controlled owner that exposes no reachable mutable list or unchecked
+pointer. The surface is move-only unless a deliberate deep-copy API is added.
+Every draw guarantees writes stay within its owned allocation, including
+negative/huge path coordinates and clips.
+
+Before the Akari gate, clear means only `clear_transparent()` and restores every
+byte to zero. A colored clear is added only with the Akari adapter and uses the
+same straight-linear conversion and ties-to-even byte rule as a full-coverage
+draw; no temporary public color type is introduced.
+
+If Mojo cannot enforce the package-controlled owner boundary, every public
+surface operation performs a full validation before use: checked
+`width * height * 4`, exact stride and byte length, `RGB <= A` for every pixel,
+and transparent black whenever alpha is zero. A mismatch raises before any
+write. Tests directly resize reachable pixel storage and corrupt both a
+premultiplication relation and an alpha-zero pixel. Avoiding this scan is not a
+reason to trust underscore privacy.
+
+### Render limits and surface atomicity
+
+`SoftwareRenderer` owns a validated `RenderLimits` value in addition to
+`GeometryTolerance`. Its versioned defaults and any caller-supplied values are
+positive, checked integers. The limits independently bound:
+
+- flattened line segments per source path;
+- stroke-outline segments per draw;
+- clip depth and total clip edges;
+- touched target pixels and 64-sample predicate evaluations; and
+- temporary bytes allocated by lowering, clip preparation, and staged output.
+
+All additions and products used for accounting are overflow-checked. The
+renderer revalidates reachable limit fields on every call. Exhausting one limit
+names that limit and raises before the surface changes; an implementation may
+not silently coarsen tolerance, drop clips, or omit pixels.
+
+Each command completes all fallible validation, geometry lowering, bounds and
+limit accounting, clip preparation, allocation, and affected-pixel computation
+before its first target write. It either stages final pixels within the temporary
+byte limit or proves the exclusive-borrowed commit loop contains only bounded,
+non-raising stores. Once commit begins there is no fallible calculation. This is
+per-command atomicity: earlier successful immediate commands remain visible if a
+later command fails.
 
 ### Reference scalar pipeline
 
 The first correct pipeline is deliberately simple:
 
 1. Validate the complete path, transform, tolerance, style, clip stack, paint,
-   target dimensions, and complexity budget.
+   target format/invariants, and renderer limits.
 2. Lower curves and strokes to finite device-space line edges in temporary
    owned storage.
 3. Cull against conservative integer target bounds without changing edge
    topology.
-4. Evaluate nonzero or even-odd membership using the locked half-open crossing
-   rule.
+4. Evaluate nonzero or even-odd membership using the exact crossing rule below.
 5. Compute coverage using an **8 by 8 centered, uniform subpixel grid**. Samples
    are `(pixel_x + (i + 0.5) / 8, pixel_y + (j + 0.5) / 8)` for `i,j` in
-   `0..8`; coverage is exactly `inside_count / 64`.
+   `{0, 1, ..., 7}`; coverage is exactly `inside_count / 64`.
 6. Evaluate every clip at the same 64 sample positions and combine inside
    predicates with logical intersection. Equivalently, intersect 64-bit sample
    masks; multiplying already-averaged per-pixel coverages is not conformant.
-7. Convert one solid Akari color to the internal premultiplied representation
-   and apply source-over.
-8. Quantize to RGBA8 once with a documented tie policy and commit bounded pixel
-   writes.
+7. Convert one finite straight linear Akari color to coverage-adjusted
+   premultiplied Float64 and apply the locked source-over operation order.
+8. Quantize each affected pixel once with round-to-nearest, ties-to-even, then
+   commit bounded writes.
+
+### Exact scalar crossing and arithmetic order
+
+The scalar oracle uses no division for edge crossing. It first detects whether a
+sample is exactly on a finite segment with an exact binary64 product-difference
+predicate. A boundary sample is inside for both fill rules. Horizontal edges
+participate in this boundary test but never update winding or parity.
+
+For every other edge, endpoints are ordered as `low` and `high` by increasing
+`y`. The sample participates exactly when `low.y <= sample.y < high.y`. A ray
+crosses to the right when this strict comparison holds:
+
+```text
+(sample.x - low.x) * (high.y - low.y)
+    < (sample.y - low.y) * (high.x - low.x)
+```
+
+The comparison evaluates each difference as finite binary64, then compares the
+two products with exact significand/exponent arithmetic; it does not round a
+division or contracted multiply-add. An original upward edge adds one winding,
+an original downward edge subtracts one, and even-odd toggles once. Equality was
+already classified as boundary and never falls through to a crossing tie. This
+locks shared vertices, horizontal edges, reversed contours, and samples exactly
+on geometry across supported scalar platforms.
+
+The reference build forbids floating-point contraction throughout flattening,
+paint conversion, and compositing. Each written operator is rounded to binary64
+before the next. For straight linear source `(r, g, b, a)` and coverage `c`, the
+operation order is:
+
+```text
+source_alpha = a * c
+source_rgb = ((r * a) * c, (g * a) * c, (b * a) * c)
+inverse_alpha = 1.0 - source_alpha
+out_rgb = source_rgb + destination_rgb * inverse_alpha
+out_alpha = source_alpha + destination_alpha * inverse_alpha
+```
+
+Each multiplication and addition is separate; no FMA substitution is conformant.
+Inputs are in `[0, 1]`, so finite results remain bounded apart from a final clamp
+that absorbs representational roundoff only. Multiplying already-averaged clip
+coverages or compositing in encoded/sRGB space is nonconformant.
 
 The 8 by 8 rule is a stable reference oracle, not a performance promise. Later
 analytic, scanline, tiled, SIMD, or GPU coverage may replace it only if the
 public conformance policy explicitly permits its differences. The scalar path
 must remain available to generate independent fixtures.
 
-A failing command is surface-atomic: validation, lowering, clip preparation,
-and allocation complete before the first target write. The surface remains
-valid and reusable after every raised error.
+A failing command is surface-atomic under the RenderLimits contract: validation,
+lowering, clip preparation, allocation, and every possibly fallible computation
+complete before the first target write. The surface remains valid and reusable
+after every raised error.
 
 ## Akari color boundary
 
@@ -362,35 +501,68 @@ At that gate:
   interpolation semantics.
 - Kagerou accepts a narrow solid-color value from Akari and does not define a
   competing RGB/HSL/color-management hierarchy.
-- The integration contract identifies the blending space explicitly. The
-  preferred contract is finite linear-light RGBA `Float64` in `[0, 1]`.
-- Kagerou clamps only where the agreed Akari conversion contract requires it,
-  premultiplies exactly once, composites in the documented space, and quantizes
-  exactly once at the RGBA8 surface boundary.
+- The adapter requests finite straight (unpremultiplied) linear-light RGBA
+  `Float64`, with every channel in `[0, 1]`. Nonfinite or out-of-range output is
+  rejected rather than silently clamped or interpreted in another space.
+- Kagerou multiplies by coverage and premultiplies in the locked order above,
+  composites in linear light, and quantizes each affected pixel exactly once at
+  the RGBA8 surface boundary with round-to-nearest, ties-to-even.
 - Internal premultiplied RGBA8 is a storage format, not an Akari public color
   model.
 
 Until that dependency gate opens, K3 tests operate on internal scalar coverage
-and explicit test-only reference channels. Root exports must not publish a
-temporary color type that downstream code could adopt.
+and explicit test-only straight linear reference channels under the same
+conversion equations. Root exports must not publish a temporary color type that
+downstream code could adopt.
 
 ## Backend and GPU seam
 
-Kagerou should stabilize semantic drawing before publishing a renderer trait.
-For v0.1, `SoftwareRenderer` consumes immutable draw inputs and an explicit
+Kagerou stabilizes semantic drawing without publishing a renderer trait. For
+v0.1, concrete `SoftwareRenderer` consumes immutable draw inputs and an explicit
 mutable `SoftwareSurface`; it does not hide a process-global current target.
 
-Internally, a small validated `DrawCommand`/`RenderBatch` representation may
-separate recording from execution when reuse is measured. It contains semantic
-paths, transforms, fill/stroke styles, clips, and solid paint—not flattened
-edges, tiles, shaders, device handles, or allocations. It is not a public
-retained scene in v0.1.
+There is no renderer trait, `DrawCommand`, `RenderBatch`, or Kagerou-owned command
+recording seam. The concrete synchronous `fill` and `stroke` methods each accept
+the target, path, transform, fill/stroke semantics, solid color, and borrowed
+caller-local `ClipStack` explicitly. Call order is draw order. Any internal edge,
+mask, or pixel staging exists only within that immediate call and is not retained
+for reuse.
+
+The complete immediate command vocabulary is conceptually:
+
+```text
+fill(surface, path, transform, fill_rule, color, clips)
+stroke(surface, path, transform, stroke_style, color, clips)
+```
+
+Transparent clear is a surface operation, not a drawing command. Rectangle,
+marker, and higher-level command kinds do not expand this vocabulary.
+
+### Sen adapter contract
+
+Sen retains its renderer-neutral RenderPlan and adapts commands outside this
+repository:
+
+- filled rectangles become closed four-line paths;
+- stroked lines/paths call immediate `stroke`;
+- filled paths call immediate `fill`;
+- markers become repeated finite paths, preserving Sen command order;
+- clip pushes/pops update one checked local `ClipStack`, which must be empty at
+  adapter completion; and
+- text commands raise an explicit unsupported-command error until a separately
+  reviewed text/glyph-outline component exists.
+
+Text is never silently dropped, approximated with host fonts, or added to
+Kagerou as a shaping system. The adapter may become useful for non-text Sen
+figures first. Kagerou does not inspect axes, series, scales, ticks, plot bounds,
+or any other plotting semantics.
 
 After the scalar conformance corpus is stable, a GPU package/module may add
 `GpuRenderer` and `GpuTarget`. It consumes the same semantic values through an
 adapter and owns all device selection, resource lifetime, asynchronous work,
 shader compilation, and GPU errors. CPU-only consumers never import or install
-that backend. Backend-specific batching and encoding remain internal.
+that backend. Backend-specific encoding remains internal and does not create a
+shared public renderer trait or command batch.
 
 Cross-backend tests render identical semantic fixtures. Exact geometry and
 topology must agree; pixels follow a published image-difference policy. GPU work
@@ -404,17 +576,21 @@ does not begin until those tests exist and the software surface is useful alone.
   allocation reuse is an internal optimization.
 - `SoftwareSurface` owns its pixels and is mutated only through checked methods.
   A renderer borrows it exclusively for a draw.
+- `SoftwareRenderer` owns immutable tolerance/limit policy. Each draw validates
+  its currently reachable values and retains no source, clip, or target borrow.
 - A source path or clip cannot alias target storage. Pixel-buffer views are not
   retained after their borrow.
 - Each public call revalidates externally reachable Mojo 1.0 storage. Mutation
-  regression tests overwrite every reachable discriminant and numeric field
-  with invalid and nonfinite values.
+  regression tests overwrite every reachable discriminant and numeric field,
+  resize reachable collections, corrupt command arity/topology, and—when the
+  opaque surface fallback is used—violate byte length and premultiplication.
 - Nominal enum-like values use representations where every constructible bit
   pattern has a defined valid meaning, or every public use rejects invalid
   state. No unknown discriminant falls through to a default behavior.
 - Public failures raise with operation and cause: invalid state, nonfinite or
-  nonrepresentable numeric result, singular transform, invalid tolerance/style,
-  unbalanced clip, dimension/stride overflow, or complexity-budget exhaustion.
+  nonrepresentable numeric result, singularity when inversion is requested,
+  invalid tolerance/style/limits, structurally invalid clip state,
+  dimension/stride overflow, or a named render-limit exhaustion.
 - Validation and lowering are failure-atomic. No public error returns a partial
   path, outline, clip, or draw.
 - Exact predicates (path state, fill rule, closure, singularity, buffer bounds)
@@ -436,6 +612,7 @@ from kagerou import (
     Path,
     PathBuilder,
     Point,
+    RenderLimits,
     SoftwareRenderer,
     SoftwareSurface,
     StrokeStyle,
@@ -453,20 +630,31 @@ builder.close()
 var triangle = builder.finish()
 
 var surface = SoftwareSurface(64, 64)
-var renderer = SoftwareRenderer(GeometryTolerance.device_pixels(0.25))
+var renderer = SoftwareRenderer(
+    GeometryTolerance.device_pixels(0.25),
+    RenderLimits.defaults(),
+)
+var clips = ClipStack()
 renderer.fill(
     surface,
     triangle,
     AffineTransform.identity(),
     FillRule.non_zero(),
     color,
+    clips,
 )
 ```
 
+`RenderLimits.defaults()` is a versioned documented value, not host-memory
+detection. Applications that need different bounds construct an explicit
+validated value.
+
 The API intentionally omits a universal shape protocol, scene graph, canvas
-state machine, generic image type, GPU target, and file save method. Examples
-may provide a tiny PPM writer outside the library if visual inspection is
-needed before an image-codec package exists.
+state machine, command batch, renderer trait, generic image type, GPU target,
+text operation, and file save method. Examples may provide a tiny raw-RGBA or
+PPM conversion outside the library if visual inspection is needed before an
+image-codec package exists; that conversion must not relabel linear bytes as
+sRGB.
 
 ## Verification strategy
 
@@ -477,19 +665,31 @@ needed before an image-codec package exists.
   mutation rejection.
 - Conservative bounds and independently generated analytic quadratic/cubic
   extrema fixtures.
+- Finite singular transforms are accepted by fill/stroke/clip lowering while
+  inversion alone rejects exact singularity; collapsed-geometry fixtures lock
+  the result.
 - Flattened line/quadratic/cubic fixtures with exact endpoints and an
   independent dense-sampling deviation oracle that does not call production
   flatness helpers.
 - Cap, join, miter fallback, dash cycle/seam, closed-path, cusp, and degenerate
-  stroke outlines.
+  stroke outlines, including isolated zero-length subpaths and miter-limit
+  equality.
 - Nonzero/even-odd fixtures with reversed, duplicated, nested,
-  self-intersecting, shared-vertex, and open contours.
+  self-intersecting, shared-vertex, open contours, horizontal edges, and samples
+  exactly on an edge.
 - Clip intersection identities: full clip is neutral, empty clip clears,
   disjoint clips clear, and reordering intersect-only clips preserves coverage.
-- Surface size/stride overflow, zero dimensions, sentinel guards around every
-  row, extreme off-screen geometry, and exact checked access.
-- Source-over transparent/opaque identities, premultiplied-channel invariants,
-  monotone alpha, and all boundary byte values.
+- Surface size/stride overflow, zero dimensions, transparent initialization,
+  exact row/channel order, sentinel guards around every row, extreme off-screen
+  geometry, exact checked access, reachable pixel-list resize, `RGB > A`, and
+  nonzero RGB at alpha zero.
+- Source-over transparent/opaque identities, linear-light repeated draws,
+  premultiplied-channel invariants, monotone alpha, ties-to-even fixtures, and
+  all boundary byte values with contraction disabled.
+- Every RenderLimits field at one-below/exact/one-above its gate, checked
+  accounting overflow, named exhaustion errors, and unchanged surfaces.
+- Sen adapter fixtures for rectangle/path/marker order, balanced clips, explicit
+  text rejection, and absence of plotting imports in Kagerou.
 
 ### Properties and metamorphic tests
 
@@ -503,15 +703,18 @@ needed before an image-codec package exists.
   swaps sides without changing the union outline.
 - Coverage is finite and in `[0, 1]`, quantized coverage is in `0..64`, and
   repeated renders are byte-identical on the supported scalar platform matrix.
+- Exact crossing classification is unchanged by edge reversal except for winding
+  sign, never counts horizontal edges, and treats boundary samples consistently.
 - Public mutation cannot produce a crash, out-of-bounds write, silent default,
   nontermination, or nonfinite published result.
 
 ### Golden corpus
 
 Golden artifacts are small raw RGBA files plus a text manifest containing
-dimensions, pixel format, color-space contract, fixture version, and SHA-256.
-Coverage-only fixtures use readable integer matrices in `0..64`. PNG is an
-optional derived review artifact, never the oracle.
+dimensions, exact stride, the fixed `linear-premultiplied-unorm8-rgba` format,
+fixture version, and SHA-256. Coverage-only fixtures use readable integer
+matrices in `0..64`. PNG is an optional color-converted derived review artifact,
+never the oracle.
 
 Every golden change includes the semantic reason and independently reviewed
 reference generation. Production helpers do not generate their own expected
@@ -557,35 +760,40 @@ are related.
 7. **K2.1 Fill rule and edge semantics.** Lock nominal rules, conceptual closure,
    half-open crossings, and winding metamorphic tests without pixels.
 8. **K2.2a Solid stroke style.** Width/cap/join/miter validation and mutation
-   rejection; hairlines remain out of scope.
+   rejection; lock half-width miter ratio/equality and every zero-length/cusp
+   behavior; hairlines remain out of scope.
 9. **K2.3a Solid stroke expansion.** Source-space outline followed by transform
    and device flattening; reference joins/caps/degenerates.
 10. **K2.2b/K2.3b Dashes.** Add validated cycles, offsets, open and closed seam
-    policy after solid strokes pass.
-11. **K2.4 Clip stack.** Intersect-only immutable entries, explicit balance,
-    transform capture, and no global renderer state.
-12. **K3.1 Pixel surface.** Move-only tightly packed RGBA8 storage, checked
-    dimensions/allocation/access, zero-size rejection, and sentinel tests.
+    traversal/phase/merge policy after solid strokes pass.
+11. **K2.4 Clip stack.** Intersect-only immutable entries in one checked
+    caller-local push/pop value, transform capture, and no scope token/global
+    renderer state.
+12. **K3.1 Pixel surface and limits.** Freeze row-major tightly packed linear
+    premultiplied UNORM8 RGBA, stride, transparent initialization, channel/alpha
+    invariants, opaque-owner/fallback validation, move-only storage, and
+    renderer-owned RenderLimits with corruption/exhaustion tests.
 13. **K3.2 Coverage rasterizer.** Implement the 8 by 8 scalar reference rule,
-    exact `0..64` coverage fixtures, bounded writes, and budget failure.
+    exact boundary/horizontal/crossing predicates, noncontracted arithmetic,
+    exact `0..64` coverage fixtures, bounded writes, and atomic limit failure.
 14. **Akari adapter gate.** Pin Akari commit/package, verify its finite linear
-    RGBA contract, add only a narrow solid-color adapter, and document the
-    dependency. Skip this issue until Akari is stable.
-15. **K3.3 Compositing.** Lock premultiplication, source-over, blending space,
-    quantization ties, and exhaustive boundary fixtures.
+    straight RGBA `[0, 1]` contract, add only a narrow solid-color adapter, and
+    document the dependency. Skip this issue until Akari is stable.
+15. **K3.3 Compositing.** Lock the specified operation order, premultiplication,
+    linear-light source-over, ties-to-even quantization, and exhaustive repeated-
+    draw/boundary fixtures.
 16. **K3.4 Clip integration.** Rasterize/intersect clip coverage and prove
     failure atomicity and surface containment.
 17. **K4.1 Conformance corpus.** Commit coverage matrices, raw RGBA goldens,
     manifests, checksums, mutation corpus, and independent generators.
 18. **K4.2 Root audit.** Export only completed semantic types; keep commands,
     edges, masks, raster stages, and storage details internal.
-19. **K4.3 Downstream proof.** Build a Sen adapter outside Kagerou; add no Sen or
-    plotting dependency here.
+19. **K4.3 Downstream proof.** Build the immediate Sen adapter outside Kagerou;
+    cover path/rectangle/marker order, local clip balance, and explicit text
+    rejection; add no Sen or plotting dependency here.
 20. **K4.4 Package matrix.** Run locked checks, examples, installed-package
     smoke, and package builds on every declared platform.
-21. **Post-v0.1 renderer recording seam.** Add an internal semantic batch only
-    if profiles show reuse value; avoid publishing a retained scene by default.
-22. **Post-v0.1 optimized backends.** Establish benchmark baselines, then scalar
+21. **Post-v0.1 optimized backends.** Establish benchmark baselines, then scalar
     optimization, SIMD, and finally an isolated GPU renderer, each gated by the
     same conformance corpus.
 
