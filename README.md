@@ -39,10 +39,12 @@ The Mojo import is `kagerou`. The eventual Conda distribution is
 `__init__.mojo` defines the package boundary.
 
 The first public slice provides constructor-validated continuous `Point`
-geometry and explicit 2D `AffineTransform` algebra. Public
-observations and operations revalidate current storage and reject floating-point
-overflow, accounting for Mojo 1.0's externally mutable struct fields. It has no
-surface, color, plotting, windowing, or GPU dependency.
+geometry and explicit 2D `AffineTransform` algebra. Construction establishes
+finite-value invariants; ordinary reads and operations trust stored state, while
+explicit `validate()` methods provide an opt-in checkpoint after unusual
+low-level mutation. Result-producing operations continue to reject
+floating-point overflow. It has no surface, color, plotting, windowing, or GPU
+dependency.
 
 ```mojo
 from kagerou import AffineTransform, Point

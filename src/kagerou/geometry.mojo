@@ -1,5 +1,7 @@
 """Validated two-dimensional points and affine transforms."""
 
+from std.builtin.comparable import Equatable
+from std.io import Writable, Writer
 from std.math import cos, ldexp, sin
 from std.memory import bitcast
 
@@ -20,6 +22,11 @@ def _is_finite(value: Float64) -> Bool:
 def _validate_finite(value: Float64, name: String) raises:
     if not _is_finite(value):
         raise Error(name + " must be finite")
+
+
+struct _Validated:
+    def __init__(out self):
+        pass
 
 
 struct _FloatParts(Copyable, ImplicitlyCopyable):
@@ -182,11 +189,13 @@ def _stable_product_sum(
     )
 
 
-struct Point(Copyable, ImplicitlyCopyable):
+struct Point(Copyable, Equatable, ImplicitlyCopyable, Writable):
     """A constructor-validated point in continuous 2D coordinates.
 
-    Public observations and operations revalidate current storage because Mojo
-    1.0 struct fields remain externally mutable.
+    Construction establishes the coordinate invariants and public operations
+    trust them thereafter. Direct mutation of underscore-prefixed storage is out
+    of contract; call ``validate`` explicitly after unusual low-level mutation
+    when a checkpoint is needed.
     """
 
     var _x: Float64
@@ -198,23 +207,32 @@ struct Point(Copyable, ImplicitlyCopyable):
         self._x = x
         self._y = y
 
-    def _validate(self) raises:
+    def validate(self) raises:
+        """Validate both stored coordinates explicitly."""
         _validate_finite(self._x, "point x")
         _validate_finite(self._y, "point y")
 
-    def x(self) raises -> Float64:
-        self._validate()
+    def x(self) -> Float64:
         return self._x
 
-    def y(self) raises -> Float64:
-        self._validate()
+    def y(self) -> Float64:
         return self._y
 
     def translated(self, dx: Float64, dy: Float64) raises -> Self:
-        self._validate()
         _validate_finite(dx, "translation x")
         _validate_finite(dy, "translation y")
         return Self(self._x + dx, self._y + dy)
+
+    def __eq__(self, other: Self) -> Bool:
+        return self._x == other._x and self._y == other._y
+
+    def __str__(self) -> String:
+        var result = String()
+        self.write_to(result)
+        return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Point(", self._x, ", ", self._y, ")")
 
 
 struct AffineTransform(Copyable, ImplicitlyCopyable):
@@ -254,8 +272,37 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
         self._ty = ty
 
     @staticmethod
-    def identity() raises -> Self:
-        return Self(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    def _from_validated(
+        xx: Float64,
+        xy: Float64,
+        yx: Float64,
+        yy: Float64,
+        tx: Float64,
+        ty: Float64,
+    ) -> Self:
+        return Self(xx, xy, yx, yy, tx, ty, _validated=_Validated())
+
+    def __init__(
+        out self,
+        xx: Float64,
+        xy: Float64,
+        yx: Float64,
+        yy: Float64,
+        tx: Float64,
+        ty: Float64,
+        *,
+        _validated: _Validated,
+    ):
+        self._xx = xx
+        self._xy = xy
+        self._yx = yx
+        self._yy = yy
+        self._tx = tx
+        self._ty = ty
+
+    @staticmethod
+    def identity() -> Self:
+        return Self._from_validated(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
     @staticmethod
     def translation(dx: Float64, dy: Float64) raises -> Self:
@@ -273,7 +320,8 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
         var sine = sin(radians)
         return Self(cosine, -sine, sine, cosine, 0.0, 0.0)
 
-    def _validate(self) raises:
+    def validate(self) raises:
+        """Validate all stored coefficients explicitly."""
         _validate_finite(self._xx, "transform xx")
         _validate_finite(self._xy, "transform xy")
         _validate_finite(self._yx, "transform yx")
@@ -281,9 +329,25 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
         _validate_finite(self._tx, "transform tx")
         _validate_finite(self._ty, "transform ty")
 
+    def xx(self) -> Float64:
+        return self._xx
+
+    def xy(self) -> Float64:
+        return self._xy
+
+    def yx(self) -> Float64:
+        return self._yx
+
+    def yy(self) -> Float64:
+        return self._yy
+
+    def tx(self) -> Float64:
+        return self._tx
+
+    def ty(self) -> Float64:
+        return self._ty
+
     def apply(self, point: Point) raises -> Point:
-        self._validate()
-        point._validate()
         return Point(
             self._xx * point._x + self._xy * point._y + self._tx,
             self._yx * point._x + self._yy * point._y + self._ty,
@@ -291,8 +355,6 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
 
     def followed_by(self, next: Self) raises -> Self:
         """Compose transforms in application order: ``next(self(point))``."""
-        self._validate()
-        next._validate()
         return Self(
             next._xx * self._xx + next._xy * self._yx,
             next._xx * self._xy + next._xy * self._yy,
@@ -309,8 +371,6 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
         separately reviewed K0.4 policy. Exact integer significands and tracked
         base-two exponents prevent determinant overflow and underflow.
         """
-        self._validate()
-
         var determinant = _combine_products(
             _exact_product(self._xx, self._yy),
             _exact_product(self._xy, self._yx),

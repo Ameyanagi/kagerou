@@ -8,17 +8,17 @@ the reference for every later raster or accelerator backend.
 
 ### K0 — Finite geometry seed
 
-- [x] **K0.1 Continuous points:** validate finite 2D construction and revalidate
-  public observations/operations after reachable storage mutation.
+- [x] **K0.1 Continuous points:** validate finite 2D construction, provide
+  non-raising observations, and expose explicit validation checkpoints.
 - [x] **K0.2 Affine transforms:** add identity, translation, scale, point
-  application, and application-ordered composition; reject mutated nonfinite
-  state and operation overflow with regression fixtures.
+  application, and application-ordered composition; reject operation overflow
+  with regression fixtures.
 - [x] **K0.3 Transform algebra:** add rotation and inversion with explicit
   singular-transform errors and identity/composition invariant tests.
 
   Evidence: radians-based counterclockwise rotation, exponent-tracked
   exact-singular inversion, two-sided round trips, reversed-composition
-  invariants, reachable storage mutation, mixed dynamic-range coefficients,
+  invariants, explicit mutation checkpoints, mixed dynamic-range coefficients,
   finite translation cancellation, and nonrepresentable-result rejection are
   covered by reference tests and installed-package smoke.
 - [ ] **K0.4 Geometry tolerance policy:** document exact versus approximate

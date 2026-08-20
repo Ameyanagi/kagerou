@@ -35,10 +35,6 @@ def test_point_translation_is_checked() raises:
     with assert_raises(contains="translation y must be finite"):
         _ = point.translated(0.0, Float64("inf"))
 
-    point._x = Float64("nan")
-    with assert_raises(contains="point x must be finite"):
-        _ = point.translated(1.0, 1.0)
-
 
 def test_point_translation_rejects_floating_overflow() raises:
     with assert_raises(contains="point x must be finite"):
@@ -68,20 +64,35 @@ def test_non_finite_geometry_is_rejected() raises:
         _ = AffineTransform.translation(Float64("inf"), 0.0)
 
 
-def test_public_operations_revalidate_mutated_storage() raises:
+def test_validate_rejects_mutated_storage() raises:
     var point = Point(1.0, 2.0)
     point._x = Float64("nan")
     with assert_raises(contains="point x must be finite"):
-        _ = point.x()
-    with assert_raises(contains="point x must be finite"):
-        _ = AffineTransform.identity().apply(point)
+        point.validate()
 
     var transform = AffineTransform.identity()
     transform._xy = Float64("inf")
     with assert_raises(contains="transform xy must be finite"):
-        _ = transform.apply(Point())
-    with assert_raises(contains="transform xy must be finite"):
-        _ = transform.followed_by(AffineTransform.identity())
+        transform.validate()
+
+
+def test_point_accessors_equality_and_string_representation() raises:
+    var point = Point(1.5, -2.25)
+    assert_true(point.x() == 1.5)
+    assert_true(point.y() == -2.25)
+    assert_true(point == Point(1.5, -2.25))
+    assert_true(point != Point(1.5, 2.25))
+    assert_true(String(point) == "Point(1.5, -2.25)")
+
+
+def test_transform_coefficient_accessors() raises:
+    var transform = AffineTransform(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    assert_true(transform.xx() == 1.0)
+    assert_true(transform.xy() == 2.0)
+    assert_true(transform.yx() == 3.0)
+    assert_true(transform.yy() == 4.0)
+    assert_true(transform.tx() == 5.0)
+    assert_true(transform.ty() == 6.0)
 
 
 def test_apply_rejects_floating_overflow() raises:
@@ -152,19 +163,6 @@ def test_inverse_reports_exact_singular_transforms() raises:
         _ = AffineTransform(1.0, 2.0, 2.0, 4.0, 3.0, -1.0).inverted()
     with assert_raises(contains="transform is singular"):
         _ = AffineTransform(1e308, 1e-308, 1e308, 1e-308, 0.0, 0.0).inverted()
-
-
-def test_inverse_revalidates_mutated_storage() raises:
-    var transform = AffineTransform.identity()
-    transform._yy = Float64("nan")
-    with assert_raises(contains="transform yy must be finite"):
-        _ = transform.inverted()
-
-    transform = AffineTransform.identity()
-    transform._xx = 0.0
-    transform._xy = 0.0
-    with assert_raises(contains="transform is singular"):
-        _ = transform.inverted()
 
 
 def test_inverse_handles_extreme_finite_row_scales() raises:

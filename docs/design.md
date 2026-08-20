@@ -10,6 +10,8 @@
 - Establish correctness and reference fixtures before optimization.
 - Make invalid public configuration unrepresentable when practical; otherwise
   reject it explicitly.
+- Validate semantic values at construction, trust them thereafter, and expose an
+  explicit validation checkpoint for unusual low-level mutation.
 - Preserve source mappings, numerical tolerances, ownership, and provenance as
   first-class data when the domain requires them.
 - Do not add a framework-wide array, executor, renderer, or application model.

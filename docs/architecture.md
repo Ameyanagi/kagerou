@@ -30,9 +30,11 @@ I/O, clocks, randomness, terminal queries, filesystem access, and accelerator
 selection stay at explicit effect or backend boundaries.
 
 Mojo 1.0 does not make underscore-prefixed struct fields private. Geometry
-constructors validate their inputs, while every public numeric observation and
-operation revalidates reachable storage. Operation results pass through the same
-constructors so floating overflow raises instead of escaping as nonfinite state.
+constructors establish invariants, and public observations and operations trust
+stored state thereafter. Direct mutation of underscore-prefixed storage is out
+of contract; public `validate()` methods provide an explicit checkpoint when a
+caller performs unusual low-level mutation. Results that can overflow still pass
+through validating constructors so nonfinite state cannot escape.
 
 Affine inversion decomposes each finite binary64 coefficient into its exact
 integer significand and base-two exponent. Products are formed exactly in

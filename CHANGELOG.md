@@ -11,10 +11,13 @@ and uses semantic versioning after the first public release.
 - Finite 2D points and affine transform application/composition.
 - Counterclockwise rotation and row-scaled affine inversion with explicit
   singular-transform errors.
+- Explicit geometry validation checkpoints, affine coefficient accessors, and
+  exact point equality and string formatting.
 
 ### Changed
 
-- Revalidate reachable mutable geometry and reject transform-result overflow.
+- Trust constructor-validated geometry during ordinary reads and operations,
+  while continuing to reject nonrepresentable operation results.
 
 ### Fixed
 
