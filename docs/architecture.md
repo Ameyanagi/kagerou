@@ -33,3 +33,8 @@ Mojo 1.0 does not make underscore-prefixed struct fields private. Geometry
 constructors validate their inputs, while every public numeric observation and
 operation revalidates reachable storage. Operation results pass through the same
 constructors so floating overflow raises instead of escaping as nonfinite state.
+
+Affine inversion normalizes each linear row before computing its determinant,
+avoiding intermediate overflow across widely separated finite row magnitudes.
+K0.3 treats only an exact zero normalized determinant as singular. Approximate
+geometry and near-singular tolerance remain owned by the unopened K0.4 gate.

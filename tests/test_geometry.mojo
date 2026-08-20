@@ -93,5 +93,76 @@ def test_composition_rejects_floating_overflow() raises:
         _ = huge_scale.followed_by(double_scale)
 
 
+def test_rotation_uses_counterclockwise_radians() raises:
+    var quarter_turn = AffineTransform.rotation(1.5707963267948966)
+    _assert_point(quarter_turn.apply(Point(2.0, 3.0)), -3.0, 2.0)
+    _assert_point(AffineTransform.rotation(0.0).apply(Point(-4.0, 5.0)), -4.0, 5.0)
+
+
+def test_rotation_rejects_nonfinite_angles() raises:
+    with assert_raises(contains="rotation angle must be finite"):
+        _ = AffineTransform.rotation(Float64("nan"))
+    with assert_raises(contains="rotation angle must be finite"):
+        _ = AffineTransform.rotation(Float64("inf"))
+
+
+def test_inverse_round_trip_and_composition_identity() raises:
+    var transform = (
+        AffineTransform.scale(1.5, 0.75)
+        .followed_by(AffineTransform.rotation(0.37))
+        .followed_by(AffineTransform.translation(-8.0, 3.5))
+    )
+    var inverse = transform.inverted()
+    var point = Point(12.25, -6.5)
+
+    _assert_point(inverse.apply(transform.apply(point)), point.x(), point.y())
+    _assert_point(transform.apply(inverse.apply(point)), point.x(), point.y())
+    _assert_point(transform.followed_by(inverse).apply(point), point.x(), point.y())
+    _assert_point(inverse.followed_by(transform).apply(point), point.x(), point.y())
+
+
+def test_inverse_reverses_composition_order() raises:
+    var first = AffineTransform(2.0, 0.25, -0.5, 1.5, 3.0, -4.0)
+    var second = AffineTransform.rotation(-0.62).followed_by(
+        AffineTransform.translation(8.0, 2.0)
+    )
+    var point = Point(-1.25, 7.0)
+    var composed_inverse = first.followed_by(second).inverted()
+    var reversed_inverses = second.inverted().followed_by(first.inverted())
+    var expected = reversed_inverses.apply(point)
+    _assert_point(composed_inverse.apply(point), expected.x(), expected.y())
+
+
+def test_inverse_reports_exact_singular_transforms() raises:
+    with assert_raises(contains="transform is singular"):
+        _ = AffineTransform.scale(0.0, 1.0).inverted()
+    with assert_raises(contains="transform is singular"):
+        _ = AffineTransform(1.0, 2.0, 2.0, 4.0, 3.0, -1.0).inverted()
+
+
+def test_inverse_revalidates_mutated_storage() raises:
+    var transform = AffineTransform.identity()
+    transform._yy = Float64("nan")
+    with assert_raises(contains="transform yy must be finite"):
+        _ = transform.inverted()
+
+    transform = AffineTransform.identity()
+    transform._xx = 0.0
+    transform._xy = 0.0
+    with assert_raises(contains="transform is singular"):
+        _ = transform.inverted()
+
+
+def test_inverse_handles_extreme_finite_row_scales() raises:
+    var transform = AffineTransform.scale(1e308, 1e-308)
+    var inverse = transform.inverted()
+    _assert_point(inverse.apply(Point(1e308, 1e-308)), 1.0, 1.0)
+
+
+def test_inverse_rejects_nonrepresentable_result() raises:
+    with assert_raises(contains="transform xx must be finite"):
+        _ = AffineTransform.scale(1e-320, 1.0).inverted()
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -1,5 +1,7 @@
 """Validated two-dimensional points and affine transforms."""
 
+from std.math import abs, cos, sin
+
 
 def _is_finite(value: Float64) -> Bool:
     return value == value and value - value == 0.0
@@ -93,6 +95,14 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
     def scale(x_factor: Float64, y_factor: Float64) raises -> Self:
         return Self(x_factor, 0.0, 0.0, y_factor, 0.0, 0.0)
 
+    @staticmethod
+    def rotation(radians: Float64) raises -> Self:
+        """Return a counterclockwise rotation around the origin."""
+        _validate_finite(radians, "rotation angle")
+        var cosine = cos(radians)
+        var sine = sin(radians)
+        return Self(cosine, -sine, sine, cosine, 0.0, 0.0)
+
     def _validate(self) raises:
         _validate_finite(self._xx, "transform xx")
         _validate_finite(self._xy, "transform xy")
@@ -120,4 +130,41 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
             next._yx * self._xy + next._yy * self._yy,
             next._xx * self._tx + next._xy * self._ty + next._tx,
             next._yx * self._tx + next._yy * self._ty + next._ty,
+        )
+
+    def inverted(self) raises -> Self:
+        """Return the inverse or raise when the linear part is singular.
+
+        Singularity is exact in K0.3; a near-singular tolerance belongs to the
+        separately reviewed K0.4 policy. Row normalization prevents determinant
+        overflow for finite matrices with very large or small row magnitudes.
+        """
+        self._validate()
+
+        var first_scale = max(abs(self._xx), abs(self._xy))
+        var second_scale = max(abs(self._yx), abs(self._yy))
+        if first_scale == 0.0 or second_scale == 0.0:
+            raise Error("transform is singular")
+
+        var xx = self._xx / first_scale
+        var xy = self._xy / first_scale
+        var yx = self._yx / second_scale
+        var yy = self._yy / second_scale
+        var determinant = xx * yy - xy * yx
+        if determinant == 0.0:
+            raise Error("transform is singular")
+
+        var inverse_xx = (yy / determinant) / first_scale
+        var inverse_xy = (-xy / determinant) / second_scale
+        var inverse_yx = (-yx / determinant) / first_scale
+        var inverse_yy = (xx / determinant) / second_scale
+        var inverse_tx = -(inverse_xx * self._tx + inverse_xy * self._ty)
+        var inverse_ty = -(inverse_yx * self._tx + inverse_yy * self._ty)
+        return Self(
+            inverse_xx,
+            inverse_xy,
+            inverse_yx,
+            inverse_yy,
+            inverse_tx,
+            inverse_ty,
         )

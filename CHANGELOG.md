@@ -9,6 +9,8 @@ and uses semantic versioning after the first public release.
 
 - Initial experimental repository scaffold.
 - Finite 2D points and affine transform application/composition.
+- Counterclockwise rotation and row-scaled affine inversion with explicit
+  singular-transform errors.
 
 ### Changed
 
