@@ -1,6 +1,16 @@
 """Validated two-dimensional points and affine transforms."""
 
-from std.math import abs, cos, sin
+from std.math import cos, ldexp, sin
+from std.memory import bitcast
+
+
+comptime _FLOAT64_FRACTION_MASK = UInt64(0x000F_FFFF_FFFF_FFFF)
+comptime _FLOAT64_EXPONENT_MASK = UInt64(0x7FF)
+comptime _FLOAT64_HIDDEN_BIT = UInt64(0x0010_0000_0000_0000)
+# A binary64 product has at most 106 significand bits. Aligning one such
+# product by 149 places its highest possible bit at signed Int256 bit 254.
+comptime _PRODUCT_SIGNIFICAND_BITS = 106
+comptime _MAX_EXACT_ALIGNMENT = 149
 
 
 def _is_finite(value: Float64) -> Bool:
@@ -10,6 +20,166 @@ def _is_finite(value: Float64) -> Bool:
 def _validate_finite(value: Float64, name: String) raises:
     if not _is_finite(value):
         raise Error(name + " must be finite")
+
+
+struct _FloatParts(Copyable, ImplicitlyCopyable):
+    var negative: Bool
+    var significand: UInt64
+    var exponent: Int
+
+    def __init__(out self, negative: Bool, significand: UInt64, exponent: Int):
+        self.negative = negative
+        self.significand = significand
+        self.exponent = exponent
+
+
+struct _ScaledInteger(Copyable, ImplicitlyCopyable):
+    """An exact integer significand multiplied by a power of two."""
+
+    var significand: Int256
+    var exponent: Int
+
+    def __init__(out self, significand: Int256, exponent: Int):
+        self.significand = significand
+        self.exponent = exponent
+
+
+def _float_parts(value: Float64) -> _FloatParts:
+    """Return the exact finite binary64 significand and base-two exponent."""
+    var bits = bitcast[DType.uint64](value)
+    var negative = ((bits >> 63) & UInt64(1)) != UInt64(0)
+    var raw_exponent = Int((bits >> 52) & _FLOAT64_EXPONENT_MASK)
+    var significand = bits & _FLOAT64_FRACTION_MASK
+    if raw_exponent == 0:
+        return _FloatParts(negative, significand, -1074)
+    return _FloatParts(negative, significand | _FLOAT64_HIDDEN_BIT, raw_exponent - 1075)
+
+
+def _bit_length(value: Int256) -> Int:
+    var cursor = value
+    var length = 0
+    while cursor != 0:
+        cursor >>= 1
+        length += 1
+    return length
+
+
+def _exact_product(left: Float64, right: Float64) -> _ScaledInteger:
+    """Multiply two finite binary64 values without exponent loss."""
+    var left_parts = _float_parts(left)
+    var right_parts = _float_parts(right)
+    if left_parts.significand == 0 or right_parts.significand == 0:
+        return _ScaledInteger(Int256(0), 0)
+
+    var significand = Int256(left_parts.significand) * Int256(right_parts.significand)
+    var shift = _PRODUCT_SIGNIFICAND_BITS - _bit_length(significand)
+    significand <<= Int256(shift)
+    if left_parts.negative != right_parts.negative:
+        significand = -significand
+    return _ScaledInteger(
+        significand, left_parts.exponent + right_parts.exponent - shift
+    )
+
+
+def _combine_products(
+    first: _ScaledInteger,
+    second: _ScaledInteger,
+    subtract_second: Bool = False,
+) -> _ScaledInteger:
+    """Combine exact products without overflowing or underflowing Float64."""
+    var second_significand = second.significand
+    if subtract_second:
+        second_significand = -second_significand
+    if first.significand == 0:
+        return _ScaledInteger(second_significand, second.exponent)
+    if second_significand == 0:
+        return first
+
+    var difference = first.exponent - second.exponent
+    if difference > _MAX_EXACT_ALIGNMENT:
+        return first
+    if difference < -_MAX_EXACT_ALIGNMENT:
+        return _ScaledInteger(second_significand, second.exponent)
+    if difference >= 0:
+        return _ScaledInteger(
+            (first.significand << Int256(difference)) + second_significand,
+            second.exponent,
+        )
+    return _ScaledInteger(
+        first.significand + (second_significand << Int256(-difference)),
+        first.exponent,
+    )
+
+
+def _scale_power_of_two(value: Float64, exponent: Int) -> Float64:
+    """Apply a base-two exponent in stdlib-safe binary64-sized steps."""
+    var result = value
+    var remaining = exponent
+    while remaining > 1023:
+        result = ldexp(result, Int32(1023))
+        remaining -= 1023
+    while remaining < -1022:
+        result = ldexp(result, Int32(-1022))
+        remaining += 1022
+    return ldexp(result, Int32(remaining))
+
+
+def _divide_by_scaled(
+    numerator: Float64, denominator: _ScaledInteger, name: String
+) raises -> Float64:
+    """Divide a finite binary64 numerator by an exact scaled integer."""
+    if numerator == 0.0:
+        return numerator
+
+    var parts = _float_parts(numerator)
+    var denominator_significand = denominator.significand
+    var negative = parts.negative
+    if denominator_significand < 0:
+        denominator_significand = -denominator_significand
+        negative = not negative
+
+    var ratio = Float64(parts.significand) / Float64(denominator_significand)
+    if negative:
+        ratio = -ratio
+    var result = _scale_power_of_two(ratio, parts.exponent - denominator.exponent)
+    _validate_finite(result, name)
+    if result == 0.0:
+        raise Error(name + " is not representable")
+    return result
+
+
+def _scaled_to_float(value: _ScaledInteger, name: String) raises -> Float64:
+    """Round an exact scaled integer to a finite, non-underflowed binary64."""
+    if value.significand == 0:
+        return 0.0
+
+    var significand = value.significand
+    var negative = significand < 0
+    if negative:
+        significand = -significand
+    var result = _scale_power_of_two(Float64(significand), value.exponent)
+    if negative:
+        result = -result
+    _validate_finite(result, name)
+    if result == 0.0:
+        raise Error(name + " is not representable")
+    return result
+
+
+def _stable_product_sum(
+    first_left: Float64,
+    first_right: Float64,
+    second_left: Float64,
+    second_right: Float64,
+    name: String,
+) raises -> Float64:
+    return _scaled_to_float(
+        _combine_products(
+            _exact_product(first_left, first_right),
+            _exact_product(second_left, second_right),
+        ),
+        name,
+    )
 
 
 struct Point(Copyable, ImplicitlyCopyable):
@@ -136,30 +306,37 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
         """Return the inverse or raise when the linear part is singular.
 
         Singularity is exact in K0.3; a near-singular tolerance belongs to the
-        separately reviewed K0.4 policy. Row normalization prevents determinant
-        overflow for finite matrices with very large or small row magnitudes.
+        separately reviewed K0.4 policy. Exact integer significands and tracked
+        base-two exponents prevent determinant overflow and underflow.
         """
         self._validate()
 
-        var first_scale = max(abs(self._xx), abs(self._xy))
-        var second_scale = max(abs(self._yx), abs(self._yy))
-        if first_scale == 0.0 or second_scale == 0.0:
+        var determinant = _combine_products(
+            _exact_product(self._xx, self._yy),
+            _exact_product(self._xy, self._yx),
+            subtract_second=True,
+        )
+        if determinant.significand == 0:
             raise Error("transform is singular")
 
-        var xx = self._xx / first_scale
-        var xy = self._xy / first_scale
-        var yx = self._yx / second_scale
-        var yy = self._yy / second_scale
-        var determinant = xx * yy - xy * yx
-        if determinant == 0.0:
-            raise Error("transform is singular")
-
-        var inverse_xx = (yy / determinant) / first_scale
-        var inverse_xy = (-xy / determinant) / second_scale
-        var inverse_yx = (-yx / determinant) / first_scale
-        var inverse_yy = (xx / determinant) / second_scale
-        var inverse_tx = -(inverse_xx * self._tx + inverse_xy * self._ty)
-        var inverse_ty = -(inverse_yx * self._tx + inverse_yy * self._ty)
+        var inverse_xx = _divide_by_scaled(self._yy, determinant, "transform xx")
+        var inverse_xy = _divide_by_scaled(-self._xy, determinant, "transform xy")
+        var inverse_yx = _divide_by_scaled(-self._yx, determinant, "transform yx")
+        var inverse_yy = _divide_by_scaled(self._xx, determinant, "transform yy")
+        var inverse_tx = _stable_product_sum(
+            -inverse_xx,
+            self._tx,
+            -inverse_xy,
+            self._ty,
+            "transform tx",
+        )
+        var inverse_ty = _stable_product_sum(
+            -inverse_yx,
+            self._tx,
+            -inverse_yy,
+            self._ty,
+            "transform ty",
+        )
         return Self(
             inverse_xx,
             inverse_xy,

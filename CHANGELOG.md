@@ -15,3 +15,8 @@ and uses semantic versioning after the first public release.
 ### Changed
 
 - Revalidate reachable mutable geometry and reject transform-result overflow.
+
+### Fixed
+
+- Preserve mixed-scale off-diagonal coefficients and finite translation
+  cancellation during affine inversion without weakening exact singularity.

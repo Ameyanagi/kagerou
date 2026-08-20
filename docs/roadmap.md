@@ -16,10 +16,11 @@ the reference for every later raster or accelerator backend.
 - [x] **K0.3 Transform algebra:** add rotation and inversion with explicit
   singular-transform errors and identity/composition invariant tests.
 
-  Evidence: radians-based counterclockwise rotation, row-scaled exact-singular
-  inversion, two-sided round trips, reversed-composition invariants, reachable
-  storage mutation, extreme finite row scales, and nonrepresentable-result
-  rejection are covered by reference tests and installed-package smoke.
+  Evidence: radians-based counterclockwise rotation, exponent-tracked
+  exact-singular inversion, two-sided round trips, reversed-composition
+  invariants, reachable storage mutation, mixed dynamic-range coefficients,
+  finite translation cancellation, and nonrepresentable-result rejection are
+  covered by reference tests and installed-package smoke.
 - [ ] **K0.4 Geometry tolerance policy:** document exact versus approximate
   comparisons and the tolerance rules used by higher-level geometry tests.
 

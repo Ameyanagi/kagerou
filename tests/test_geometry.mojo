@@ -7,6 +7,10 @@ def _near(left: Float64, right: Float64, tolerance: Float64 = 1e-12) -> Bool:
     return abs(left - right) <= tolerance
 
 
+def _near_relative(left: Float64, right: Float64, tolerance: Float64 = 1e-12) -> Bool:
+    return abs(left - right) <= tolerance * max(1.0, abs(left), abs(right))
+
+
 def _assert_point(point: Point, x: Float64, y: Float64) raises:
     assert_true(_near(point.x(), x))
     assert_true(_near(point.y(), y))
@@ -133,11 +137,21 @@ def test_inverse_reverses_composition_order() raises:
     _assert_point(composed_inverse.apply(point), expected.x(), expected.y())
 
 
+def test_inverse_handles_negative_determinant() raises:
+    var transform = AffineTransform(0.0, 1.0, 1.0, 0.0, 2.0, -3.0)
+    var inverse = transform.inverted()
+    var point = Point(4.0, -7.0)
+    _assert_point(inverse.apply(transform.apply(point)), point.x(), point.y())
+    _assert_point(transform.apply(inverse.apply(point)), point.x(), point.y())
+
+
 def test_inverse_reports_exact_singular_transforms() raises:
     with assert_raises(contains="transform is singular"):
         _ = AffineTransform.scale(0.0, 1.0).inverted()
     with assert_raises(contains="transform is singular"):
         _ = AffineTransform(1.0, 2.0, 2.0, 4.0, 3.0, -1.0).inverted()
+    with assert_raises(contains="transform is singular"):
+        _ = AffineTransform(1e308, 1e-308, 1e308, 1e-308, 0.0, 0.0).inverted()
 
 
 def test_inverse_revalidates_mutated_storage() raises:
@@ -159,9 +173,58 @@ def test_inverse_handles_extreme_finite_row_scales() raises:
     _assert_point(inverse.apply(Point(1e308, 1e-308)), 1.0, 1.0)
 
 
+def test_inverse_preserves_mixed_scale_off_diagonal() raises:
+    var transform = AffineTransform(1e308, 1e-308, 0.0, 1e-308, 0.0, 0.0)
+    var inverse = transform.inverted()
+    var output = Point(0.0, 1.0)
+    var source = inverse.apply(output)
+    assert_true(source.x() < 0.0)
+    assert_true(_near_relative(source.x(), -1e-308))
+    assert_true(_near_relative(source.y(), 1e308))
+    _assert_point(transform.apply(source), output.x(), output.y())
+
+    var restored = inverse.apply(transform.apply(source))
+    assert_true(restored.x() < 0.0)
+    assert_true(_near_relative(restored.x(), source.x()))
+    assert_true(_near_relative(restored.y(), source.y()))
+
+
+def test_inverse_does_not_misclassify_mixed_scale_determinant() raises:
+    var transform = AffineTransform(1e308, 1e-308, 1e308, 2e-308, 0.0, 0.0)
+    var inverse = transform.inverted()
+    var output = Point(1.0, 0.0)
+    var source = inverse.apply(output)
+    assert_true(source.x() > 0.0)
+    assert_true(source.y() < 0.0)
+    assert_true(_near_relative(source.x(), 2e-308))
+    assert_true(_near_relative(source.y(), -1e308))
+    _assert_point(transform.apply(source), output.x(), output.y())
+
+    var restored = inverse.apply(transform.apply(source))
+    assert_true(restored.x() > 0.0)
+    assert_true(restored.y() < 0.0)
+    assert_true(_near_relative(restored.x(), source.x()))
+    assert_true(_near_relative(restored.y(), source.y()))
+
+
+def test_inverse_translation_allows_finite_cancellation() raises:
+    var transform = AffineTransform(2e-308, 1e-308, 1e-308, 2e-308, 3.0, 3.0)
+    var inverse = transform.inverted()
+    var source = inverse.apply(Point())
+    assert_true(_near_relative(source.x(), -1e308))
+    assert_true(_near_relative(source.y(), -1e308))
+    _assert_point(transform.apply(source), 0.0, 0.0)
+
+    var restored = inverse.apply(transform.apply(source))
+    assert_true(_near_relative(restored.x(), source.x()))
+    assert_true(_near_relative(restored.y(), source.y()))
+
+
 def test_inverse_rejects_nonrepresentable_result() raises:
     with assert_raises(contains="transform xx must be finite"):
         _ = AffineTransform.scale(1e-320, 1.0).inverted()
+    with assert_raises(contains="transform xy is not representable"):
+        _ = AffineTransform(1e308, 1.0, 0.0, 1e308, 0.0, 0.0).inverted()
 
 
 def main() raises:

@@ -34,7 +34,14 @@ constructors validate their inputs, while every public numeric observation and
 operation revalidates reachable storage. Operation results pass through the same
 constructors so floating overflow raises instead of escaping as nonfinite state.
 
-Affine inversion normalizes each linear row before computing its determinant,
-avoiding intermediate overflow across widely separated finite row magnitudes.
-K0.3 treats only an exact zero normalized determinant as singular. Approximate
-geometry and near-singular tolerance remain owned by the unopened K0.4 gate.
+Affine inversion decomposes each finite binary64 coefficient into its exact
+integer significand and base-two exponent. Products are formed exactly in
+`Int256`; terms are aligned exactly whenever cancellation is possible, and a
+term separated by more than the retained 149-bit window cannot affect zero
+classification or a binary64 result. Only an exact zero determinant is
+singular. Inverse coefficients apply their exponents in binary64-sized steps,
+and inverse translation uses the same exact-product accumulation so finite
+cancellation cannot be lost to intermediate overflow. Any nonzero result that
+would underflow, or any result that would overflow, is rejected as
+nonrepresentable. Approximate geometry and near-singular tolerance remain owned
+by the unopened K0.4 gate.
