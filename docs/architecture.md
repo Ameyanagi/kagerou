@@ -16,6 +16,11 @@ install an application, renderer, language layer, or scientific stack.
 
 Planned implementation areas: points, transforms, paths, strokes, fills, clips, software surfaces, rasterization, antialiasing, and an isolated future GPU renderer.
 
+The researched target contracts, primary-source provenance, adopted and
+rejected complexity, minimal public API, verification strategy, and
+dependency-ready issue order are specified in
+[reference-architecture.md](reference-architecture.md).
+
 The package root exports only the small documented public surface. Algorithms,
 generated tables, platform details, and backend implementations remain in
 their owning modules. Generic Mojo-native buffers, spans, strings, and

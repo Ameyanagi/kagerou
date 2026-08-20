@@ -11,6 +11,9 @@ and uses semantic versioning after the first public release.
 - Finite 2D points and affine transform application/composition.
 - Counterclockwise rotation and row-scaled affine inversion with explicit
   singular-transform errors.
+- Pinned primary-source reference architecture for paths, tolerance, stroke,
+  fill, clipping, software rasterization, the Akari boundary, and a future
+  isolated GPU backend.
 
 ### Changed
 

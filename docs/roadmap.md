@@ -4,6 +4,9 @@ Each checkbox is a reviewable issue completed with implementation, focused
 tests, an example when public, and updated contracts. Correct scalar geometry is
 the reference for every later raster or accelerator backend.
 
+The pinned primary-source survey and executable contracts behind this order are
+documented in [reference-architecture.md](reference-architecture.md).
+
 ## v0.1 — Foundation
 
 ### K0 — Finite geometry seed
