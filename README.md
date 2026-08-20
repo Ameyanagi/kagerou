@@ -1,6 +1,6 @@
 # Kagerou
 
-> **Experimental — API not yet released.**
+> **Experimental — API may change before v1.0.**
 
 Low-level native 2D rendering for Mojo.
 
@@ -8,7 +8,10 @@ Low-level native 2D rendering for Mojo.
 
 Kagerou is a renderer rather than a GUI toolkit, window system, plotting library, or application framework.
 
-The first implementation milestone is intentionally narrow: define points, affine transforms, paths, strokes, fills, clipping, and a correctness-first software surface and rasterizer.
+The current implementation milestone is intentionally narrow: establish
+validated continuous `Point` values and `AffineTransform` application and
+composition. Paths, strokes, fills, clipping, and the correctness-first software
+surface follow through the later v0.1 gates.
 The project is independently installable and does not require any application
 from the wider ecosystem.
 
@@ -34,8 +37,17 @@ The Mojo import is `kagerou`. The eventual Conda distribution is
 `mojo-kagerou`. Source lives under `src/kagerou/`, whose
 `__init__.mojo` defines the package boundary.
 
-The current scaffold includes only an internal smoke marker. Nothing is
-re-exported as a stable public API yet.
+The first public slice provides constructor-validated continuous `Point`
+geometry and explicit 2D `AffineTransform` application/composition. Public
+observations and operations revalidate current storage and reject floating-point
+overflow, accounting for Mojo 1.0's externally mutable struct fields. It has no
+surface, color, plotting, windowing, or GPU dependency.
+
+```mojo
+from kagerou import AffineTransform, Point
+
+var device = AffineTransform.scale(2.0, 2.0).apply(Point(4.0, 6.0))
+```
 
 ## Repository map
 

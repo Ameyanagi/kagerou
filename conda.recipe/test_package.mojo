@@ -1,6 +1,6 @@
-from kagerou._scaffold import scaffold_name
-from std.testing import assert_equal
+from kagerou import AffineTransform, Point
+from std.testing import assert_true
 
 
 def main() raises:
-    assert_equal(scaffold_name(), "kagerou")
+    assert_true(AffineTransform.identity().apply(Point()).x() == 0.0)

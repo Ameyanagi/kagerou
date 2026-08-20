@@ -8,3 +8,8 @@ and uses semantic versioning after the first public release.
 ### Added
 
 - Initial experimental repository scaffold.
+- Finite 2D points and affine transform application/composition.
+
+### Changed
+
+- Revalidate reachable mutable geometry and reject transform-result overflow.
