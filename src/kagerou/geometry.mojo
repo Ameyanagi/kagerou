@@ -22,7 +22,7 @@ def _is_finite(value: Float64) -> Bool:
 
 def _validate_finite(value: Float64, name: String) raises:
     if not _is_finite(value):
-        raise Error(name + " must be finite")
+        raise Error(String(name, " must be finite, got ", value))
 
 
 struct _Validated:
@@ -152,7 +152,13 @@ def _divide_by_scaled(
     var result = _scale_power_of_two(ratio, parts.exponent - denominator.exponent)
     _validate_finite(result, name)
     if result == 0.0:
-        raise Error(name + " is not representable")
+        raise Error(
+            String(
+                name,
+                " of the result is not representable as a finite nonzero ",
+                "Float64: the transform is too extreme to invert exactly",
+            )
+        )
     return result
 
 
@@ -170,7 +176,13 @@ def _scaled_to_float(value: _ScaledInteger, name: String) raises -> Float64:
         result = -result
     _validate_finite(result, name)
     if result == 0.0:
-        raise Error(name + " is not representable")
+        raise Error(
+            String(
+                name,
+                " of the result is not representable as a finite nonzero ",
+                "Float64: the transform is too extreme to invert exactly",
+            )
+        )
     return result
 
 
@@ -380,13 +392,23 @@ struct Rect(Copyable, Equatable, ImplicitlyCopyable, Writable):
         _validate_finite(y1, "rect y1")
         if x0 > x1:
             raise Error(
-                "rect x0 must not exceed x1: construct with sorted edges or use "
-                "Rect.from_points"
+                String(
+                    "rect x0 (",
+                    x0,
+                    ") must not exceed x1 (",
+                    x1,
+                    "): construct with sorted edges or use Rect.from_points",
+                )
             )
         if y0 > y1:
             raise Error(
-                "rect y0 must not exceed y1: construct with sorted edges or use "
-                "Rect.from_points"
+                String(
+                    "rect y0 (",
+                    y0,
+                    ") must not exceed y1 (",
+                    y1,
+                    "): construct with sorted edges or use Rect.from_points",
+                )
             )
         _validate_finite(x1 - x0, "rect width")
         _validate_finite(y1 - y0, "rect height")
@@ -426,13 +448,23 @@ struct Rect(Copyable, Equatable, ImplicitlyCopyable, Writable):
         _validate_finite(self._y1, "rect y1")
         if self._x0 > self._x1:
             raise Error(
-                "rect x0 must not exceed x1: construct with sorted edges or use "
-                "Rect.from_points"
+                String(
+                    "rect x0 (",
+                    self._x0,
+                    ") must not exceed x1 (",
+                    self._x1,
+                    "): construct with sorted edges or use Rect.from_points",
+                )
             )
         if self._y0 > self._y1:
             raise Error(
-                "rect y0 must not exceed y1: construct with sorted edges or use "
-                "Rect.from_points"
+                String(
+                    "rect y0 (",
+                    self._y0,
+                    ") must not exceed y1 (",
+                    self._y1,
+                    "): construct with sorted edges or use Rect.from_points",
+                )
             )
         _validate_finite(self._x1 - self._x0, "rect width")
         _validate_finite(self._y1 - self._y0, "rect height")
@@ -517,7 +549,17 @@ struct Rect(Copyable, Equatable, ImplicitlyCopyable, Writable):
         var x1 = self._x1 + amount
         var y1 = self._y1 + amount
         if x0 > x1 or y0 > y1:
-            raise Error("rect inflation must not collapse past center")
+            raise Error(
+                String(
+                    "rect inflation amount ",
+                    amount,
+                    " collapses the rect past its center (width ",
+                    self.width(),
+                    ", height ",
+                    self.height(),
+                    "): use a smaller deflation",
+                )
+            )
         return Self(x0, y0, x1, y1)
 
     def __eq__(self, other: Self) -> Bool:
@@ -688,7 +730,14 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
         and is shaped for later SIMD specialization.
         """
         if len(xs) != len(ys):
-            raise Error("apply_batch requires xs and ys of equal length")
+            raise Error(
+                String(
+                    "apply_batch requires xs and ys of equal length, got ",
+                    len(xs),
+                    " and ",
+                    len(ys),
+                )
+            )
 
         for index in range(len(xs)):
             var x = xs[index]
@@ -729,7 +778,19 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
             subtract_second=True,
         )
         if determinant.significand == 0:
-            raise Error("transform is singular")
+            raise Error(
+                String(
+                    "transform is singular (xx*yy - xy*yx == 0 for xx=",
+                    self._xx,
+                    ", xy=",
+                    self._xy,
+                    ", yx=",
+                    self._yx,
+                    ", yy=",
+                    self._yy,
+                    "): it has no inverse; check for a zero scale factor",
+                )
+            )
 
         var inverse_xx = _divide_by_scaled(self._yy, determinant, "transform xx")
         var inverse_xy = _divide_by_scaled(-self._xy, determinant, "transform xy")

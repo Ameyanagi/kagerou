@@ -171,14 +171,19 @@ struct Path(Copyable, Equatable, Movable, Writable):
         """Return a copy with every stored point mapped by ``transform``."""
         var coordinates = List[Float64](capacity=len(self._coordinates))
         for index in range(0, len(self._coordinates), 2):
-            var point = Point(
-                self._coordinates[index],
-                self._coordinates[index + 1],
-                _validated=_Validated(),
-            )
-            var mapped = transform.apply(point)
-            coordinates.append(mapped.x())
-            coordinates.append(mapped.y())
+            var x = self._coordinates[index]
+            var y = self._coordinates[index + 1]
+            var mapped_x = transform.xx() * x + transform.xy() * y + transform.tx()
+            var mapped_y = transform.yx() * x + transform.yy() * y + transform.ty()
+            if not _is_finite(mapped_x) or not _is_finite(mapped_y):
+                raise Error(
+                    String(
+                        "transformed produced a nonfinite coordinate at point index ",
+                        index // 2,
+                    )
+                )
+            coordinates.append(mapped_x)
+            coordinates.append(mapped_y)
         var verbs = self._verbs.copy()
         return Self(
             _verbs=verbs^,
@@ -200,8 +205,11 @@ struct Path(Copyable, Equatable, Movable, Writable):
         """
         if not _is_finite(tolerance) or tolerance <= 0.0:
             raise Error(
-                "flatten tolerance must be a positive finite device-space "
-                "distance (0.25 recommended for antialiased output)"
+                String(
+                    "flatten tolerance must be a positive finite device-space ",
+                    "distance (0.25 recommended for antialiased output), got ",
+                    tolerance,
+                )
             )
 
         var builder = PathBuilder()
@@ -331,12 +339,14 @@ struct PathBuilder(Movable):
     var _coordinates: List[Float64]
     var _pending_move: Optional[Point]
     var _has_current_point: Bool
+    var _closed_subpath: Bool
 
     def __init__(out self):
         self._verbs = List[PathVerb]()
         self._coordinates = List[Float64]()
         self._pending_move = None
         self._has_current_point = False
+        self._closed_subpath = False
 
     def _append_point(mut self, point: Point):
         self._coordinates.append(point.x())
@@ -352,6 +362,14 @@ struct PathBuilder(Movable):
 
     def _require_current_point(self, operation: String) raises:
         if not self._pending_move and not self._has_current_point:
+            if self._closed_subpath:
+                raise Error(
+                    String(
+                        operation,
+                        " after close: close ended the subpath; start a new one ",
+                        "with move_to",
+                    )
+                )
             raise Error(
                 String(
                     operation,
@@ -368,11 +386,13 @@ struct PathBuilder(Movable):
         self._commit_pending_move()
         self._verbs.append(PathVerb.CLOSE)
         self._has_current_point = False
+        self._closed_subpath = True
 
     def move_to(mut self, point: Point):
         """Start a subpath, replacing any preceding undrawn ``MOVE``."""
         self._pending_move = point
         self._has_current_point = False
+        self._closed_subpath = False
 
     def line_to(mut self, point: Point) raises:
         self._require_current_point("line_to")
@@ -469,32 +489,59 @@ struct PathBuilder(Movable):
         and follows positive coordinate-space winding before closing.
         """
         if not _is_finite(radius) or radius <= 0.0:
-            raise Error("circle radius must be a positive finite device-space distance")
+            raise Error(
+                String(
+                    "circle radius must be a positive finite device-space ",
+                    "distance, got ",
+                    radius,
+                )
+            )
 
         var cx = center.x()
         var cy = center.y()
+        # Every emitted coordinate lies between an extreme and the center, and
+        # IEEE addition is monotonic, so checking the four extremes suffices.
+        if (
+            not _is_finite(cx + radius)
+            or not _is_finite(cx - radius)
+            or not _is_finite(cy + radius)
+            or not _is_finite(cy - radius)
+        ):
+            raise Error(
+                String(
+                    "circle at center (",
+                    cx,
+                    ", ",
+                    cy,
+                    ") with radius ",
+                    radius,
+                    " produced a nonfinite coordinate: shrink the radius or ",
+                    "move the center",
+                )
+            )
+
         var offset = radius * _CIRCLE_KAPPA
         var builder = PathBuilder()
-        builder.move_to(Point(cx + radius, cy))
+        builder.move_to(Point._from_validated(cx + radius, cy))
         builder.cubic_to(
-            Point(cx + radius, cy + offset),
-            Point(cx + offset, cy + radius),
-            Point(cx, cy + radius),
+            Point._from_validated(cx + radius, cy + offset),
+            Point._from_validated(cx + offset, cy + radius),
+            Point._from_validated(cx, cy + radius),
         )
         builder.cubic_to(
-            Point(cx - offset, cy + radius),
-            Point(cx - radius, cy + offset),
-            Point(cx - radius, cy),
+            Point._from_validated(cx - offset, cy + radius),
+            Point._from_validated(cx - radius, cy + offset),
+            Point._from_validated(cx - radius, cy),
         )
         builder.cubic_to(
-            Point(cx - radius, cy - offset),
-            Point(cx - offset, cy - radius),
-            Point(cx, cy - radius),
+            Point._from_validated(cx - radius, cy - offset),
+            Point._from_validated(cx - offset, cy - radius),
+            Point._from_validated(cx, cy - radius),
         )
         builder.cubic_to(
-            Point(cx + offset, cy - radius),
-            Point(cx + radius, cy - offset),
-            Point(cx + radius, cy),
+            Point._from_validated(cx + offset, cy - radius),
+            Point._from_validated(cx + radius, cy - offset),
+            Point._from_validated(cx + radius, cy),
         )
         builder.close()
         return builder^.finish()

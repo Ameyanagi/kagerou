@@ -59,9 +59,9 @@ def test_dense_affine_composition_matches_sequential_application() raises:
 
 
 def test_non_finite_geometry_is_rejected() raises:
-    with assert_raises(contains="point x must be finite"):
+    with assert_raises(contains="point x must be finite, got nan"):
         _ = Point(Float64("nan"), 0.0)
-    with assert_raises(contains="transform tx must be finite"):
+    with assert_raises(contains="transform tx must be finite, got inf"):
         _ = AffineTransform.translation(Float64("inf"), 0.0)
 
 
@@ -118,7 +118,9 @@ def test_apply_batch_matches_scalar_application_exactly() raises:
 def test_apply_batch_rejects_length_mismatch_before_mutation() raises:
     var xs: List[Float64] = [1.0, 2.0]
     var ys: List[Float64] = [3.0]
-    with assert_raises(contains="apply_batch requires xs and ys of equal length"):
+    with assert_raises(
+        contains="apply_batch requires xs and ys of equal length, got 2 and 1"
+    ):
         AffineTransform.identity().apply_batch(xs, ys)
     assert_true(xs[0] == 1.0 and xs[1] == 2.0)
     assert_true(ys[0] == 3.0)
@@ -194,11 +196,16 @@ def test_inverse_handles_negative_determinant() raises:
 
 
 def test_inverse_reports_exact_singular_transforms() raises:
-    with assert_raises(contains="transform is singular"):
+    with assert_raises(
+        contains=(
+            "transform is singular (xx*yy - xy*yx == 0 for xx=0.0, xy=0.0, "
+            "yx=0.0, yy=1.0): it has no inverse; check for a zero scale factor"
+        )
+    ):
         _ = AffineTransform.scale(0.0, 1.0).inverted()
-    with assert_raises(contains="transform is singular"):
+    with assert_raises(contains="transform is singular (xx*yy - xy*yx == 0"):
         _ = AffineTransform(1.0, 2.0, 2.0, 4.0, 3.0, -1.0).inverted()
-    with assert_raises(contains="transform is singular"):
+    with assert_raises(contains="transform is singular (xx*yy - xy*yx == 0"):
         _ = AffineTransform(1e308, 1e-308, 1e308, 1e-308, 0.0, 0.0).inverted()
 
 
@@ -258,7 +265,12 @@ def test_inverse_translation_allows_finite_cancellation() raises:
 def test_inverse_rejects_nonrepresentable_result() raises:
     with assert_raises(contains="transform xx must be finite"):
         _ = AffineTransform.scale(1e-320, 1.0).inverted()
-    with assert_raises(contains="transform xy is not representable"):
+    with assert_raises(
+        contains=(
+            "transform xy of the result is not representable as a finite nonzero "
+            "Float64: the transform is too extreme to invert exactly"
+        )
+    ):
         _ = AffineTransform(1e308, 1.0, 0.0, 1e308, 0.0, 0.0).inverted()
 
 

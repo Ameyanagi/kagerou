@@ -78,9 +78,30 @@ def test_builder_rejects_post_close_draw_until_new_move() raises:
     builder.line_to(Point(1.0, 0.0))
     builder.close()
     with assert_raises(
-        contains="line_to before move_to: begin a subpath with move_to first"
+        contains=(
+            "line_to after close: close ended the subpath; start a new one with move_to"
+        )
     ):
         builder.line_to(Point(2.0, 0.0))
+    with assert_raises(
+        contains=(
+            "quad_to after close: close ended the subpath; start a new one with move_to"
+        )
+    ):
+        builder.quad_to(Point(), Point())
+    with assert_raises(
+        contains=(
+            "cubic_to after close: close ended the subpath; start a new one with "
+            "move_to"
+        )
+    ):
+        builder.cubic_to(Point(), Point(), Point())
+    with assert_raises(
+        contains=(
+            "close after close: close ended the subpath; start a new one with move_to"
+        )
+    ):
+        builder.close()
 
     builder.move_to(Point(2.0, 0.0))
     builder.line_to(Point(3.0, 0.0))
@@ -174,8 +195,19 @@ def test_transformed_rejects_nonfinite_results() raises:
     builder.move_to(Point(2.0, 0.0))
     builder.line_to(Point(3.0, 1.0))
     var path = builder^.finish()
-    with assert_raises(contains="point x must be finite"):
+    with assert_raises(
+        contains="transformed produced a nonfinite coordinate at point index 0"
+    ):
         _ = path.transformed(AffineTransform.scale(1e308, 1.0))
+
+    var later_builder = PathBuilder()
+    later_builder.move_to(Point(0.0, 0.0))
+    later_builder.line_to(Point(2.0, 0.0))
+    var later_path = later_builder^.finish()
+    with assert_raises(
+        contains="transformed produced a nonfinite coordinate at point index 1"
+    ):
+        _ = later_path.transformed(AffineTransform.scale(1e308, 1.0))
 
 
 def test_bounds_rejects_empty_and_bounds_lines_exactly() raises:
@@ -292,22 +324,35 @@ def test_circle_verb_pattern_quadrants_and_radial_error() raises:
 def test_circle_rejects_invalid_radius_and_overflow() raises:
     var center = Point()
     with assert_raises(
-        contains="circle radius must be a positive finite device-space distance"
+        contains=(
+            "circle radius must be a positive finite device-space distance, got 0.0"
+        )
     ):
         _ = PathBuilder.circle(center, 0.0)
     with assert_raises(
-        contains="circle radius must be a positive finite device-space distance"
+        contains=(
+            "circle radius must be a positive finite device-space distance, got -1.0"
+        )
     ):
         _ = PathBuilder.circle(center, -1.0)
     with assert_raises(
-        contains="circle radius must be a positive finite device-space distance"
+        contains=(
+            "circle radius must be a positive finite device-space distance, got nan"
+        )
     ):
         _ = PathBuilder.circle(center, Float64("nan"))
     with assert_raises(
-        contains="circle radius must be a positive finite device-space distance"
+        contains=(
+            "circle radius must be a positive finite device-space distance, got inf"
+        )
     ):
         _ = PathBuilder.circle(center, Float64("inf"))
-    with assert_raises(contains="point x must be finite"):
+    with assert_raises(
+        contains=(
+            "circle at center (1e+308, 0.0) with radius 1e+308 produced a "
+            "nonfinite coordinate: shrink the radius or move the center"
+        )
+    ):
         _ = PathBuilder.circle(Point(1e308, 0.0), 1e308)
 
 

@@ -68,7 +68,7 @@ def test_vector_arithmetic_is_checked() raises:
     _assert_vector(vector - Vec2(2.0, 1.0), 1.0, -5.0)
     _assert_vector(vector * 2.0, 6.0, -8.0)
     _assert_vector(-vector, -3.0, 4.0)
-    with assert_raises(contains="vector scale factor must be finite"):
+    with assert_raises(contains="vector scale factor must be finite, got inf"):
         _ = vector * Float64("inf")
     with assert_raises(contains="vector dx must be finite"):
         _ = Vec2(1e308, 0.0) + Vec2(1e308, 0.0)
@@ -109,9 +109,9 @@ def test_transform_vector_application_rejects_overflow() raises:
 
 
 def test_rect_constructor_rejects_unsorted_edges() raises:
-    with assert_raises(contains="rect x0 must not exceed x1"):
+    with assert_raises(contains="rect x0 (2.0) must not exceed x1 (1.0)"):
         _ = Rect(2.0, 0.0, 1.0, 1.0)
-    with assert_raises(contains="rect y0 must not exceed y1"):
+    with assert_raises(contains="rect y0 (2.0) must not exceed y1 (1.0)"):
         _ = Rect(0.0, 2.0, 1.0, 1.0)
 
 
@@ -193,7 +193,12 @@ def test_rect_inflation_grows_and_shrinks() raises:
 
 def test_rect_inflation_rejects_invalid_results() raises:
     var rect = Rect(0.0, 0.0, 4.0, 6.0)
-    with assert_raises(contains="rect inflation must not collapse past center"):
+    with assert_raises(
+        contains=(
+            "rect inflation amount -3.0 collapses the rect past its center "
+            "(width 4.0, height 6.0): use a smaller deflation"
+        )
+    ):
         _ = rect.inflated(-3.0)
     with assert_raises(contains="rect inflation amount must be finite"):
         _ = rect.inflated(Float64("nan"))
@@ -211,7 +216,7 @@ def test_vector_and_rect_validate_mutated_storage() raises:
 
     var rect = Rect(0.0, 0.0, 2.0, 3.0)
     rect._x1 = -1.0
-    with assert_raises(contains="rect x0 must not exceed x1"):
+    with assert_raises(contains="rect x0 (0.0) must not exceed x1 (-1.0)"):
         rect.validate()
 
 
