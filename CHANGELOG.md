@@ -13,6 +13,9 @@ and uses semantic versioning after the first public release.
   singular-transform errors.
 - Explicit geometry validation checkpoints, affine coefficient accessors, and
   exact point equality and string formatting.
+- Validated `Vec2` displacements with point/vector arithmetic, linear-part
+  affine application, and a sorted, finite-extent `Rect` with
+  union/intersection/containment/inflation.
 
 ### Changed
 
