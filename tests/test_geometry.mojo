@@ -49,6 +49,17 @@ def test_composition_order_is_explicit() raises:
     _assert_point(composed.apply(Point(4.0, 5.0)), 10.0, 21.0)
 
 
+def test_multiplication_alias_uses_application_order() raises:
+    var translation = AffineTransform.translation(4.0, -8.0)
+    var scale = AffineTransform.scale(2.0, 4.0)
+    var point = Point(8.0, 16.0)
+    var multiplied = (translation * scale).apply(point)
+    var followed = translation.followed_by(scale).apply(point)
+    var sequential = scale.apply(translation.apply(point))
+    assert_true(multiplied == followed)
+    assert_true(multiplied == sequential)
+
+
 def test_dense_affine_composition_matches_sequential_application() raises:
     var first = AffineTransform(1.5, -0.25, 0.75, 2.0, -3.0, 4.0)
     var second = AffineTransform(-1.0, 0.5, 1.25, 0.8, 2.0, -5.0)

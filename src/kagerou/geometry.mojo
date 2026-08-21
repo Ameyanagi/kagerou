@@ -593,7 +593,8 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
     """A constructor-validated 2D affine 2-by-3 matrix.
 
     A point is mapped to ``(xx*x + xy*y + tx, yx*x + yy*y + ty)``.
-    ``followed_by(next)`` applies this transform first and ``next`` second.
+    ``followed_by(next)`` and ``self * next`` apply this transform first and
+    ``next`` second.
     """
 
     var _xx: Float64
@@ -764,6 +765,15 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
             next._xx * self._tx + next._xy * self._ty + next._tx,
             next._yx * self._tx + next._yy * self._ty + next._ty,
         )
+
+    def __mul__(self, next: Self) raises -> Self:
+        """Compose in application order: ``(a * b)`` applies ``a`` first, then ``b``.
+
+        Identical to ``a.followed_by(b)``. Note the order is application order,
+        NOT kurbo's function-composition order where ``a * b`` applies ``b``
+        first.
+        """
+        return self.followed_by(next)
 
     def inverted(self) raises -> Self:
         """Return the inverse or raise when the linear part is singular.

@@ -83,9 +83,9 @@ program as `quickstart.mojo` and run it with
 
 ## A real task
 
-This example flattens a circle, walks the public SoA path storage, and sends
-each vertex to a stand-in downstream consumer. Replace `_send_to_consumer` with
-the vertex sink for a tessellator, renderer, or file format.
+This example flattens a circle, walks its typed path elements, and sends each
+vertex to a stand-in downstream consumer. Replace `_send_to_consumer` with the
+vertex sink for a tessellator, renderer, or file format.
 
 ```mojo
 from kagerou import PathBuilder, Point
@@ -98,16 +98,14 @@ def _send_to_consumer(x: Float64, y: Float64):
 def main() raises:
     var circle = PathBuilder.circle(Point(100.0, 100.0), 40.0)
     var polyline = circle.flattened(0.25)
-    var coordinates = polyline.coordinates()
-    var coordinate_index = 0
+    var elements = polyline.elements()
     var vertex_count = 0
 
-    for verb in polyline.verbs():
-        for point_index in range(verb.point_count()):
-            var offset = coordinate_index + 2 * point_index
-            _send_to_consumer(coordinates[offset], coordinates[offset + 1])
+    for element in elements:
+        if element.point_count() > 0:
+            var point = element.p0()
+            _send_to_consumer(point.x(), point.y())
             vertex_count += 1
-        coordinate_index += 2 * verb.point_count()
 
     var bounds = polyline.bounds()
     print("vertices:", vertex_count)
