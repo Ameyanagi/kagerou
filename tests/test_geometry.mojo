@@ -1,4 +1,5 @@
 from kagerou import AffineTransform, Point
+from std.collections import List
 from std.math import abs
 from std.testing import TestSuite, assert_raises, assert_true
 
@@ -99,6 +100,42 @@ def test_apply_rejects_floating_overflow() raises:
     var huge_scale = AffineTransform.scale(1e308, 1.0)
     with assert_raises(contains="point x must be finite"):
         _ = huge_scale.apply(Point(2.0, 0.0))
+
+
+def test_apply_batch_matches_scalar_application_exactly() raises:
+    var transform = AffineTransform(1.5, -0.25, 0.75, 2.0, -3.0, 4.0)
+    var source_xs: List[Float64] = [-2.0, 0.0, 1.5, 8.0]
+    var source_ys: List[Float64] = [3.0, -4.0, 2.5, 0.25]
+    var xs = source_xs.copy()
+    var ys = source_ys.copy()
+    transform.apply_batch(xs, ys)
+    for index in range(len(xs)):
+        var expected = transform.apply(Point(source_xs[index], source_ys[index]))
+        assert_true(xs[index] == expected.x())
+        assert_true(ys[index] == expected.y())
+
+
+def test_apply_batch_rejects_length_mismatch_before_mutation() raises:
+    var xs: List[Float64] = [1.0, 2.0]
+    var ys: List[Float64] = [3.0]
+    with assert_raises(contains="apply_batch requires xs and ys of equal length"):
+        AffineTransform.identity().apply_batch(xs, ys)
+    assert_true(xs[0] == 1.0 and xs[1] == 2.0)
+    assert_true(ys[0] == 3.0)
+
+
+def test_apply_batch_rejects_nonfinite_results() raises:
+    var xs: List[Float64] = [2.0]
+    var ys: List[Float64] = [0.0]
+    with assert_raises(contains="apply_batch produced a nonfinite result at index 0"):
+        AffineTransform.scale(1e308, 1.0).apply_batch(xs, ys)
+
+
+def test_apply_batch_accepts_empty_lists() raises:
+    var xs = List[Float64]()
+    var ys = List[Float64]()
+    AffineTransform.translation(3.0, 4.0).apply_batch(xs, ys)
+    assert_true(len(xs) == 0 and len(ys) == 0)
 
 
 def test_composition_rejects_floating_overflow() raises:

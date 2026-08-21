@@ -20,6 +20,12 @@ and uses semantic versioning after the first public release.
   transform, conservative control-box bounds, `PathBuilder` state-machine
   construction, `PathVerb`/`FillRule` nominal values, and rectangle/circle
   factories.
+- Recursive de Casteljau curve flattening with a documented device-space
+  tolerance policy and deterministic termination.
+- In-place `AffineTransform.apply_batch` over parallel coordinate arrays.
+- A documented y-down coordinate convention and scientific y-up adapter.
+- A damped-sine flattening example with Hermite-to-Bézier construction, golden
+  segment-count growth, and viewport batch transformation.
 
 ### Changed
 

@@ -3,6 +3,7 @@
 from std.builtin.comparable import Equatable
 from std.collections import List, Optional
 from std.io import Writable, Writer
+from std.math import abs, sqrt
 
 from .geometry import (
     AffineTransform,
@@ -17,6 +18,8 @@ from .geometry import (
 # The standard four-cubic circle construction follows from matching a
 # quadrant's endpoint tangents: kappa = 4 / 3 * (sqrt(2) - 1).
 comptime _CIRCLE_KAPPA = 0.5522847498307936
+comptime DEFAULT_FLATTEN_TOLERANCE = 0.25  # Device-space units.
+comptime _MAX_FLATTEN_DEPTH = 24
 
 
 struct PathVerb(Copyable, Equatable, ImplicitlyCopyable, Writable):
@@ -182,6 +185,89 @@ struct Path(Copyable, Equatable, Movable, Writable):
             _coordinates=coordinates^,
             _validated=_Validated(),
         )
+
+    def flattened(
+        self,
+        tolerance: Float64 = DEFAULT_FLATTEN_TOLERANCE,
+    ) raises -> Self:
+        """Return a MOVE/LINE/CLOSE approximation within ``tolerance``.
+
+        Quadratics and cubics use recursive midpoint de Casteljau subdivision.
+        A conservative control-point-to-chord bound decides when to emit the
+        true curve endpoint. The deterministic depth cap of 24 is unreachable
+        in practical positive-tolerance work; at the cap the endpoint is
+        emitted rather than raising.
+        """
+        if not _is_finite(tolerance) or tolerance <= 0.0:
+            raise Error(
+                "flatten tolerance must be a positive finite device-space "
+                "distance (0.25 recommended for antialiased output)"
+            )
+
+        var builder = PathBuilder()
+        var coordinate_index = 0
+        var current = Point._from_validated(0.0, 0.0)
+        for verb in self._verbs:
+            if verb == PathVerb.MOVE:
+                current = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                coordinate_index += 2
+                builder.move_to(current)
+            elif verb == PathVerb.LINE:
+                current = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                coordinate_index += 2
+                builder.line_to(current)
+            elif verb == PathVerb.QUAD:
+                var control = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                var endpoint = Point._from_validated(
+                    self._coordinates[coordinate_index + 2],
+                    self._coordinates[coordinate_index + 3],
+                )
+                coordinate_index += 4
+                _flatten_quadratic(
+                    current,
+                    control,
+                    endpoint,
+                    tolerance,
+                    0,
+                    builder,
+                )
+                current = endpoint
+            elif verb == PathVerb.CUBIC:
+                var control1 = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                var control2 = Point._from_validated(
+                    self._coordinates[coordinate_index + 2],
+                    self._coordinates[coordinate_index + 3],
+                )
+                var endpoint = Point._from_validated(
+                    self._coordinates[coordinate_index + 4],
+                    self._coordinates[coordinate_index + 5],
+                )
+                coordinate_index += 6
+                _flatten_cubic(
+                    current,
+                    control1,
+                    control2,
+                    endpoint,
+                    tolerance,
+                    0,
+                    builder,
+                )
+                current = endpoint
+            else:
+                builder.close()
+        return builder^.finish()
 
     def bounds(self) raises -> Rect:
         """Return conservative control-box bounds over every stored point.
@@ -412,3 +498,141 @@ struct PathBuilder(Movable):
         )
         builder.close()
         return builder^.finish()
+
+
+def _midpoint(first: Point, second: Point) -> Point:
+    """Return an overflow-safe midpoint of two validated finite points."""
+    return Point._from_validated(
+        first.x() * 0.5 + second.x() * 0.5,
+        first.y() * 0.5 + second.y() * 0.5,
+    )
+
+
+def _point_distance(first: Point, second: Point) -> Float64:
+    """Return a scaled Euclidean distance without squaring large values."""
+    var dx = first.x() - second.x()
+    var dy = first.y() - second.y()
+    var scale = max(abs(dx), abs(dy))
+    if scale == 0.0:
+        return 0.0
+    if not _is_finite(scale):
+        return scale
+    dx /= scale
+    dy /= scale
+    return scale * sqrt(dx * dx + dy * dy)
+
+
+def _point_to_chord_distance(point: Point, start: Point, end: Point) -> Float64:
+    """Return distance to the finite chord, including degenerate chords."""
+    var chord_x = end.x() - start.x()
+    var chord_y = end.y() - start.y()
+    var chord_scale = max(abs(chord_x), abs(chord_y))
+    if chord_scale == 0.0:
+        return _point_distance(point, start)
+    if not _is_finite(chord_scale):
+        return chord_scale
+
+    var relative_x = point.x() - start.x()
+    var relative_y = point.y() - start.y()
+    var relative_scale = max(abs(relative_x), abs(relative_y))
+    if not _is_finite(relative_scale):
+        return relative_scale
+
+    chord_x /= chord_scale
+    chord_y /= chord_scale
+    relative_x /= chord_scale
+    relative_y /= chord_scale
+    var chord_length_squared = chord_x * chord_x + chord_y * chord_y
+    var projection = relative_x * chord_x + relative_y * chord_y
+    if projection <= 0.0:
+        return _point_distance(point, start)
+    if projection >= chord_length_squared:
+        return _point_distance(point, end)
+
+    var factor = projection / chord_length_squared
+    var residual_x = relative_x - factor * chord_x
+    var residual_y = relative_y - factor * chord_y
+    return chord_scale * sqrt(residual_x * residual_x + residual_y * residual_y)
+
+
+def _flatten_quadratic(
+    start: Point,
+    control: Point,
+    endpoint: Point,
+    tolerance: Float64,
+    depth: Int,
+    mut builder: PathBuilder,
+) raises:
+    # The true quadratic's maximum deviation is at most half the control
+    # distance. Using the whole control-to-chord distance is conservative.
+    if (
+        depth >= _MAX_FLATTEN_DEPTH
+        or _point_to_chord_distance(control, start, endpoint) <= tolerance
+    ):
+        builder.line_to(endpoint)
+        return
+
+    var start_control = _midpoint(start, control)
+    var control_endpoint = _midpoint(control, endpoint)
+    var midpoint = _midpoint(start_control, control_endpoint)
+    _flatten_quadratic(
+        start,
+        start_control,
+        midpoint,
+        tolerance,
+        depth + 1,
+        builder,
+    )
+    _flatten_quadratic(
+        midpoint,
+        control_endpoint,
+        endpoint,
+        tolerance,
+        depth + 1,
+        builder,
+    )
+
+
+def _flatten_cubic(
+    start: Point,
+    control1: Point,
+    control2: Point,
+    endpoint: Point,
+    tolerance: Float64,
+    depth: Int,
+    mut builder: PathBuilder,
+) raises:
+    # A cubic's maximum deviation is at most three quarters of the greater
+    # control distance. Using the whole maximum is conservative.
+    var flatness = max(
+        _point_to_chord_distance(control1, start, endpoint),
+        _point_to_chord_distance(control2, start, endpoint),
+    )
+    if depth >= _MAX_FLATTEN_DEPTH or flatness <= tolerance:
+        builder.line_to(endpoint)
+        return
+
+    var start_control1 = _midpoint(start, control1)
+    var control1_control2 = _midpoint(control1, control2)
+    var control2_endpoint = _midpoint(control2, endpoint)
+    var left_control2 = _midpoint(start_control1, control1_control2)
+    var right_control1 = _midpoint(control1_control2, control2_endpoint)
+    var midpoint = _midpoint(left_control2, right_control1)
+    _flatten_cubic(
+        start,
+        start_control1,
+        left_control2,
+        midpoint,
+        tolerance,
+        depth + 1,
+        builder,
+    )
+    _flatten_cubic(
+        midpoint,
+        right_control1,
+        control2_endpoint,
+        endpoint,
+        tolerance,
+        depth + 1,
+        builder,
+    )

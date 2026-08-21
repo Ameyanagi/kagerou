@@ -21,30 +21,45 @@ the reference for every later raster or accelerator backend.
   invariants, explicit mutation checkpoints, mixed dynamic-range coefficients,
   finite translation cancellation, and nonrepresentable-result rejection are
   covered by reference tests and installed-package smoke.
-- [ ] **K0.4 Geometry tolerance policy:** document exact versus approximate
+- [x] **K0.4 Geometry tolerance policy:** document exact versus approximate
   comparisons and the tolerance rules used by higher-level geometry tests.
 
-Completion gate: root imports contain only `Point` and `AffineTransform`; the
-installed-package smoke test applies a transform without Akari or Sen.
+  Evidence: exact structural comparisons are separated from the named 0.25
+  device-unit flattening tolerance, with dense sampled-distance fixtures at
+  1.0, 0.25, and 0.01.
+
+Completion gate: root imports remain limited to semantic geometry and path
+vocabulary; the installed-package smoke test applies a transform without Akari
+or Sen.
 
 ### K1 — Paths
 
-- [ ] **K1.1 Path command values:** define move, line, quadratic, cubic, and
+- [x] **K1.1 Path command values:** define move, line, quadratic, cubic, and
   close commands as nominal values with finite coordinates.
-- [ ] **K1.2 Path builder:** enforce a valid current-point/subpath state and
+- [x] **K1.2 Path builder:** enforce a valid current-point/subpath state and
   reject drawing commands before the first move.
 - [ ] **K1.3 Bounds:** compute conservative scalar path bounds, followed by exact
   Bézier-extrema bounds as a separately reviewed issue.
-- [ ] **K1.4 Flattening:** convert curves to line segments under an explicit
+
+  Note: conservative control-box bounds have landed; exact Bézier-extrema bounds
+  remain open.
+- [x] **K1.4 Flattening:** convert curves to line segments under an explicit
   device-space tolerance with deterministic termination tests.
+
+  Evidence: MOVE/LINE/CLOSE-only output, exact source endpoints, recursive
+  de Casteljau error bounds, depth-capped termination, damped-sine goldens, and
+  monotonic segment growth are covered by focused tests and a compiling example.
 
 Dependency gate: K1 begins after K0.3 and K0.4 stabilize transformation and
 tolerance semantics. Paths remain independent of color and surfaces.
 
 ### K2 — Stroke, fill, and clipping semantics
 
-- [ ] **K2.1 Fill rule:** define nonzero and even-odd rules independently of a
+- [x] **K2.1 Fill rule:** define nonzero and even-odd rules independently of a
   rasterizer implementation.
+
+  Evidence: nominal `FillRule.NONZERO` and `FillRule.EVEN_ODD` values are
+  defined and tested independently of rasterization.
 - [ ] **K2.2 Stroke style:** validate width, cap, join, miter limit, and dash
   pattern as renderer-neutral values.
 - [ ] **K2.3 Stroke expansion:** lower stroked paths to fillable geometry with

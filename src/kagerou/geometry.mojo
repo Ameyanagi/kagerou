@@ -1,6 +1,7 @@
 """Validated two-dimensional geometry and affine transforms."""
 
 from std.builtin.comparable import Equatable
+from std.collections import List
 from std.io import Writable, Writer
 from std.math import cos, ldexp, sin, sqrt
 from std.memory import bitcast
@@ -674,6 +675,35 @@ struct AffineTransform(Copyable, ImplicitlyCopyable):
             self._xx * vector._dx + self._xy * vector._dy,
             self._yx * vector._dx + self._yy * vector._dy,
         )
+
+    def apply_batch(
+        self,
+        mut xs: List[Float64],
+        mut ys: List[Float64],
+    ) raises:
+        """Map parallel coordinate arrays in place.
+
+        The pair of results at each index is validated before either input is
+        overwritten. The straight indexed loop has no per-element allocation
+        and is shaped for later SIMD specialization.
+        """
+        if len(xs) != len(ys):
+            raise Error("apply_batch requires xs and ys of equal length")
+
+        for index in range(len(xs)):
+            var x = xs[index]
+            var y = ys[index]
+            var mapped_x = self._xx * x + self._xy * y + self._tx
+            var mapped_y = self._yx * x + self._yy * y + self._ty
+            if not _is_finite(mapped_x) or not _is_finite(mapped_y):
+                raise Error(
+                    String(
+                        "apply_batch produced a nonfinite result at index ",
+                        index,
+                    )
+                )
+            xs[index] = mapped_x
+            ys[index] = mapped_y
 
     def followed_by(self, next: Self) raises -> Self:
         """Compose transforms in application order: ``next(self(point))``."""
