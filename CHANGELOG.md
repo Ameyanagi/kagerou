@@ -16,6 +16,10 @@ and uses semantic versioning after the first public release.
 - Validated `Vec2` displacements with point/vector arithmetic, linear-part
   affine application, and a sorted, finite-extent `Rect` with
   union/intersection/containment/inflation.
+- Immutable SoA `Path` (verb array plus interleaved coordinates) with
+  transform, conservative control-box bounds, `PathBuilder` state-machine
+  construction, `PathVerb`/`FillRule` nominal values, and rectangle/circle
+  factories.
 
 ### Changed
 

@@ -296,6 +296,20 @@ struct Point(Copyable, Equatable, ImplicitlyCopyable, Writable):
         self._x = x
         self._y = y
 
+    @staticmethod
+    def _from_validated(x: Float64, y: Float64) -> Self:
+        return Self(x, y, _validated=_Validated())
+
+    def __init__(
+        out self,
+        x: Float64,
+        y: Float64,
+        *,
+        _validated: _Validated,
+    ):
+        self._x = x
+        self._y = y
+
     def validate(self) raises:
         """Validate both stored coordinates explicitly."""
         _validate_finite(self._x, "point x")
