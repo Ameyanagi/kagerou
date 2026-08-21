@@ -28,3 +28,24 @@ explicit typed values, produce deterministic outputs for deterministic inputs,
 and report invalid state rather than silently replacing it with a default.
 I/O, clocks, randomness, terminal queries, filesystem access, and accelerator
 selection stay at explicit effect or backend boundaries.
+
+Mojo 1.0 does not make underscore-prefixed struct fields private. Geometry
+constructors establish invariants, and public observations and operations trust
+stored state thereafter. Direct mutation of underscore-prefixed storage is out
+of contract; public `validate()` methods provide an explicit checkpoint when a
+caller performs unusual low-level mutation. Results that can overflow still pass
+through validating constructors so nonfinite state cannot escape.
+
+Affine inversion decomposes each finite binary64 coefficient into its exact
+integer significand and base-two exponent. Products are formed exactly in
+`Int256`; terms are aligned exactly whenever cancellation is possible. A term
+separated by more than the retained 149-bit window cannot affect exact-zero
+classification and lies below the retained working precision, but it can still
+decide a binary64 halfway-rounding case by one ulp. K0.3 therefore does not
+promise correctly rounded inverse coefficients. Only an exact zero determinant
+is singular. Inverse coefficients apply their exponents in binary64-sized
+steps, and inverse translation uses the same exact-product accumulation so
+finite cancellation cannot be lost to intermediate overflow. Any nonzero result
+that would underflow, or any result that would overflow, is rejected as
+nonrepresentable. Approximate geometry and near-singular tolerance remain owned
+by the unopened K0.4 gate.
