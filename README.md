@@ -37,11 +37,21 @@ read-only view of the exact owned storage, including stride padding.
 
 ## Install
 
-Add Kagerou to another Pixi project from the Mojo ecosystem channel:
+Add Kagerou to another Pixi project with the ecosystem channel first, followed
+by Modular's Mojo channel and conda-forge:
+
+```toml
+[workspace]
+channels = [
+    "https://ameyanagi.github.io/mojo-channel",
+    "https://conda.modular.com/max",
+    "conda-forge",
+]
+```
+
+Then install the package:
 
 ```sh
-# In your pixi project
-pixi project channel add https://ameyanagi.github.io/mojo-channel
 pixi add mojo-kagerou
 ```
 
