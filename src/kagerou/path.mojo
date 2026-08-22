@@ -67,6 +67,78 @@ struct PathVerb(Copyable, Equatable, ImplicitlyCopyable, Writable):
             writer.write("CLOSE")
 
 
+struct PathElement(Copyable, Equatable, ImplicitlyCopyable, Writable):
+    """A typed path command and its meaningful point slots.
+
+    ``MOVE`` and ``LINE`` use ``p0``. ``QUAD`` uses ``p0`` as its control and
+    ``p1`` as its endpoint. ``CUBIC`` uses ``p0`` and ``p1`` as controls and
+    ``p2`` as its endpoint. ``CLOSE`` uses no points. Unused slots are origin
+    placeholders.
+    """
+
+    var _verb: PathVerb
+    var _p0: Point
+    var _p1: Point
+    var _p2: Point
+
+    def __init__(
+        out self,
+        verb: PathVerb,
+        p0: Point,
+        p1: Point,
+        p2: Point,
+    ):
+        self._verb = verb
+        self._p0 = Point._from_validated(0.0, 0.0)
+        self._p1 = Point._from_validated(0.0, 0.0)
+        self._p2 = Point._from_validated(0.0, 0.0)
+        var count = verb.point_count()
+        if count > 0:
+            self._p0 = p0
+        if count > 1:
+            self._p1 = p1
+        if count > 2:
+            self._p2 = p2
+
+    def verb(self) -> PathVerb:
+        return self._verb
+
+    def p0(self) -> Point:
+        return self._p0
+
+    def p1(self) -> Point:
+        return self._p1
+
+    def p2(self) -> Point:
+        return self._p2
+
+    def point_count(self) -> Int:
+        return self._verb.point_count()
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self._verb == other._verb
+            and self._p0 == other._p0
+            and self._p1 == other._p1
+            and self._p2 == other._p2
+        )
+
+    def __str__(self) -> String:
+        var result = String()
+        self.write_to(result)
+        return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("PathElement(", self._verb)
+        if self.point_count() > 0:
+            writer.write(", ", self._p0)
+        if self.point_count() > 1:
+            writer.write(", ", self._p1)
+        if self.point_count() > 2:
+            writer.write(", ", self._p2)
+        writer.write(")")
+
+
 struct FillRule(Copyable, Equatable, ImplicitlyCopyable, Writable):
     """Select the winding rule used when a path is filled.
 
@@ -105,6 +177,9 @@ struct Path(Copyable, Equatable, Movable, Writable):
     its factories establishes these invariants. Direct underscore-field
     mutation is out of contract; call ``validate`` explicitly after unusual
     low-level mutation when a checkpoint is needed.
+
+    Use ``elements()`` for a typed per-command view without manually walking
+    the parallel verb and coordinate streams.
     """
 
     var _verbs: List[PathVerb]
@@ -136,6 +211,41 @@ struct Path(Copyable, Equatable, Movable, Writable):
     def coordinates(self) -> Span[Float64, origin_of(self._coordinates)]:
         """Return a borrowed view of interleaved x/y coordinate storage."""
         return Span(self._coordinates)
+
+    def elements(self) -> List[PathElement]:
+        """Return the typed per-element view of the command stream.
+
+        Each element carries its verb and meaningful points in the slot
+        convention documented by ``PathElement``. Stored path state is trusted.
+        """
+        var elements = List[PathElement](capacity=len(self._verbs))
+        var coordinate_index = 0
+        var origin = Point._from_validated(0.0, 0.0)
+        for verb in self._verbs:
+            var p0 = origin
+            var p1 = origin
+            var p2 = origin
+            var count = verb.point_count()
+            if count > 0:
+                p0 = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                coordinate_index += 2
+            if count > 1:
+                p1 = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                coordinate_index += 2
+            if count > 2:
+                p2 = Point._from_validated(
+                    self._coordinates[coordinate_index],
+                    self._coordinates[coordinate_index + 1],
+                )
+                coordinate_index += 2
+            elements.append(PathElement(verb, p0, p1, p2))
+        return elements^
 
     def validate(self) raises:
         """Re-check storage arity, subpath structure, and finiteness."""
@@ -171,14 +281,19 @@ struct Path(Copyable, Equatable, Movable, Writable):
         """Return a copy with every stored point mapped by ``transform``."""
         var coordinates = List[Float64](capacity=len(self._coordinates))
         for index in range(0, len(self._coordinates), 2):
-            var point = Point(
-                self._coordinates[index],
-                self._coordinates[index + 1],
-                _validated=_Validated(),
-            )
-            var mapped = transform.apply(point)
-            coordinates.append(mapped.x())
-            coordinates.append(mapped.y())
+            var x = self._coordinates[index]
+            var y = self._coordinates[index + 1]
+            var mapped_x = transform.xx() * x + transform.xy() * y + transform.tx()
+            var mapped_y = transform.yx() * x + transform.yy() * y + transform.ty()
+            if not _is_finite(mapped_x) or not _is_finite(mapped_y):
+                raise Error(
+                    String(
+                        "transformed produced a nonfinite coordinate at point index ",
+                        index // 2,
+                    )
+                )
+            coordinates.append(mapped_x)
+            coordinates.append(mapped_y)
         var verbs = self._verbs.copy()
         return Self(
             _verbs=verbs^,
@@ -200,8 +315,11 @@ struct Path(Copyable, Equatable, Movable, Writable):
         """
         if not _is_finite(tolerance) or tolerance <= 0.0:
             raise Error(
-                "flatten tolerance must be a positive finite device-space "
-                "distance (0.25 recommended for antialiased output)"
+                String(
+                    "flatten tolerance must be a positive finite device-space ",
+                    "distance (0.25 recommended for antialiased output), got ",
+                    tolerance,
+                )
             )
 
         var builder = PathBuilder()
@@ -331,12 +449,14 @@ struct PathBuilder(Movable):
     var _coordinates: List[Float64]
     var _pending_move: Optional[Point]
     var _has_current_point: Bool
+    var _closed_subpath: Bool
 
     def __init__(out self):
         self._verbs = List[PathVerb]()
         self._coordinates = List[Float64]()
         self._pending_move = None
         self._has_current_point = False
+        self._closed_subpath = False
 
     def _append_point(mut self, point: Point):
         self._coordinates.append(point.x())
@@ -352,6 +472,14 @@ struct PathBuilder(Movable):
 
     def _require_current_point(self, operation: String) raises:
         if not self._pending_move and not self._has_current_point:
+            if self._closed_subpath:
+                raise Error(
+                    String(
+                        operation,
+                        " after close: close ended the subpath; start a new one ",
+                        "with move_to",
+                    )
+                )
             raise Error(
                 String(
                     operation,
@@ -368,11 +496,13 @@ struct PathBuilder(Movable):
         self._commit_pending_move()
         self._verbs.append(PathVerb.CLOSE)
         self._has_current_point = False
+        self._closed_subpath = True
 
     def move_to(mut self, point: Point):
         """Start a subpath, replacing any preceding undrawn ``MOVE``."""
         self._pending_move = point
         self._has_current_point = False
+        self._closed_subpath = False
 
     def line_to(mut self, point: Point) raises:
         self._require_current_point("line_to")
@@ -408,6 +538,80 @@ struct PathBuilder(Movable):
         self._require_current_point("close")
         self._close_validated()
 
+    def add_rect(mut self, rect: Rect):
+        """Append a new closed rectangle subpath.
+
+        Combining two nested rectangles under ``FillRule.EVEN_ODD`` produces a
+        hole: the rectangle form of the motivating donut use.
+        """
+        self.move_to(Point._from_validated(rect.min_x(), rect.min_y()))
+        self._line_to_validated(Point._from_validated(rect.max_x(), rect.min_y()))
+        self._line_to_validated(Point._from_validated(rect.max_x(), rect.max_y()))
+        self._line_to_validated(Point._from_validated(rect.min_x(), rect.max_y()))
+        self._close_validated()
+
+    def add_circle(mut self, center: Point, radius: Float64) raises:
+        """Append a new four-cubic closed circle subpath.
+
+        Combining two nested circles under ``FillRule.EVEN_ODD`` produces a
+        hole: the motivating donut use.
+        """
+        if not _is_finite(radius) or radius <= 0.0:
+            raise Error(
+                String(
+                    "circle radius must be a positive finite device-space ",
+                    "distance, got ",
+                    radius,
+                )
+            )
+
+        var cx = center.x()
+        var cy = center.y()
+        # Every emitted coordinate lies between an extreme and the center, and
+        # IEEE addition is monotonic, so checking the four extremes suffices.
+        if (
+            not _is_finite(cx + radius)
+            or not _is_finite(cx - radius)
+            or not _is_finite(cy + radius)
+            or not _is_finite(cy - radius)
+        ):
+            raise Error(
+                String(
+                    "circle at center (",
+                    cx,
+                    ", ",
+                    cy,
+                    ") with radius ",
+                    radius,
+                    " produced a nonfinite coordinate: shrink the radius or ",
+                    "move the center",
+                )
+            )
+
+        var offset = radius * _CIRCLE_KAPPA
+        self.move_to(Point._from_validated(cx + radius, cy))
+        self.cubic_to(
+            Point._from_validated(cx + radius, cy + offset),
+            Point._from_validated(cx + offset, cy + radius),
+            Point._from_validated(cx, cy + radius),
+        )
+        self.cubic_to(
+            Point._from_validated(cx - offset, cy + radius),
+            Point._from_validated(cx - radius, cy + offset),
+            Point._from_validated(cx - radius, cy),
+        )
+        self.cubic_to(
+            Point._from_validated(cx - radius, cy - offset),
+            Point._from_validated(cx - offset, cy - radius),
+            Point._from_validated(cx, cy - radius),
+        )
+        self.cubic_to(
+            Point._from_validated(cx + offset, cy - radius),
+            Point._from_validated(cx + radius, cy - offset),
+            Point._from_validated(cx + radius, cy),
+        )
+        self.close()
+
     def finish(var self) -> Path:
         """Consume this builder, dropping any pending undrawn ``MOVE``."""
         var verbs = self._verbs^
@@ -429,35 +633,7 @@ struct PathBuilder(Movable):
         clockwise. ``CLOSE`` supplies the fourth side.
         """
         var builder = PathBuilder()
-        builder.move_to(
-            Point(
-                rect.min_x(),
-                rect.min_y(),
-                _validated=_Validated(),
-            )
-        )
-        builder._line_to_validated(
-            Point(
-                rect.max_x(),
-                rect.min_y(),
-                _validated=_Validated(),
-            )
-        )
-        builder._line_to_validated(
-            Point(
-                rect.max_x(),
-                rect.max_y(),
-                _validated=_Validated(),
-            )
-        )
-        builder._line_to_validated(
-            Point(
-                rect.min_x(),
-                rect.max_y(),
-                _validated=_Validated(),
-            )
-        )
-        builder._close_validated()
+        builder.add_rect(rect)
         return builder^.finish()
 
     @staticmethod
@@ -468,35 +644,8 @@ struct PathBuilder(Movable):
         ``kappa = 4 / 3 * (sqrt(2) - 1)``. The path begins at ``center.x + r``
         and follows positive coordinate-space winding before closing.
         """
-        if not _is_finite(radius) or radius <= 0.0:
-            raise Error("circle radius must be a positive finite device-space distance")
-
-        var cx = center.x()
-        var cy = center.y()
-        var offset = radius * _CIRCLE_KAPPA
         var builder = PathBuilder()
-        builder.move_to(Point(cx + radius, cy))
-        builder.cubic_to(
-            Point(cx + radius, cy + offset),
-            Point(cx + offset, cy + radius),
-            Point(cx, cy + radius),
-        )
-        builder.cubic_to(
-            Point(cx - offset, cy + radius),
-            Point(cx - radius, cy + offset),
-            Point(cx - radius, cy),
-        )
-        builder.cubic_to(
-            Point(cx - radius, cy - offset),
-            Point(cx - offset, cy - radius),
-            Point(cx, cy - radius),
-        )
-        builder.cubic_to(
-            Point(cx + offset, cy - radius),
-            Point(cx + radius, cy - offset),
-            Point(cx + radius, cy),
-        )
-        builder.close()
+        builder.add_circle(center, radius)
         return builder^.finish()
 
 

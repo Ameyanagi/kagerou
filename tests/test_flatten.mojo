@@ -250,6 +250,13 @@ def test_invalid_flatten_tolerances_use_teaching_message() raises:
     builder.move_to(Point())
     builder.line_to(Point(1.0, 1.0))
     var path = builder^.finish()
+    with assert_raises(
+        contains=(
+            "flatten tolerance must be a positive finite device-space distance "
+            "(0.25 recommended for antialiased output), got 0.0"
+        )
+    ):
+        _ = path.flattened(0.0)
     with assert_raises(contains=_FLATTEN_ERROR):
         _ = path.flattened(0.0)
     with assert_raises(contains=_FLATTEN_ERROR):
