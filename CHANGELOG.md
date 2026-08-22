@@ -1,9 +1,11 @@
 # Changelog
 
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
-and uses semantic versioning after the first public release.
+and uses semantic versioning.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-08-22
 
 ### Added
 
@@ -58,3 +60,6 @@ and uses semantic versioning after the first public release.
   line intercept.
 - Skip zero-length scalar tail dispatch and nominal row walks when validating an
   empty surface layout.
+
+[Unreleased]: https://github.com/Ameyanagi/kagerou/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Ameyanagi/kagerou/releases/tag/v0.1.0

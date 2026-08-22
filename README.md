@@ -45,8 +45,8 @@ pixi project channel add https://ameyanagi.github.io/mojo-channel
 pixi add mojo-kagerou
 ```
 
-The Mojo import name is `kagerou`, while the package name is `mojo-kagerou`;
-the package publishes with the ecosystem's Wave releases.
+The Mojo import name is `kagerou`, while the package name is `mojo-kagerou`.
+Package releases are distributed through the ecosystem channel.
 
 Alternatively, work from a source checkout:
 
