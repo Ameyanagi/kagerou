@@ -9,3 +9,4 @@ from .path import (
     PathElement,
     PathVerb,
 )
+from .surface import PixelRect, Rgba8, Surface

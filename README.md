@@ -11,19 +11,29 @@ library, or application framework.
 
 The current implementation milestone provides validated continuous geometry,
 affine transforms, immutable paths, stateful path construction, conservative
-bounds, and deterministic curve flattening under an explicit device-space
-tolerance. Strokes, fills, clipping, and the correctness-first software surface
-follow through later v0.1 gates.
+bounds, deterministic curve flattening, and an owned premultiplied RGBA8
+software surface with clipped solid fills and source-over compositing. Stroke
+geometry, antialiased coverage, and clip stacks follow through later v0.1
+gates. The current binary-coverage path rasterizer supports nonzero/even-odd
+fills, implicit closure, rectangular pixel clips, and deterministic curves via
+the existing flattening tolerance.
 The project is independently installable and does not require any application
 from the wider ecosystem.
 
 The public slice provides constructor-validated geometry, explicit 2D transform
-algebra, and SoA paths that flatten curves for a downstream raster backend.
-Construction establishes finite-value invariants; ordinary reads and operations
-trust stored state, while explicit `validate()` methods provide an opt-in
-checkpoint after unusual low-level mutation. Result-producing operations
-continue to reject floating-point overflow. It has no surface, color, plotting,
-windowing, or GPU dependency.
+algebra, SoA paths, and checked owned pixel storage. Construction establishes
+finite geometry, layout, and premultiplication invariants; ordinary reads and
+operations trust stored state, while explicit `validate()` methods provide an
+opt-in checkpoint after unusual low-level mutation. Surface dimensions and
+strides are overflow-checked, pixel access is bounds-checked, and signed solid
+spans and rectangles clip without overflowing their end coordinates. Kagerou
+also rasterizes paths by a documented pixel-center rule and contains every
+write in both the surface and an optional `PixelRect`. It still has no plotting,
+windowing, GPU, Sen, or Akari dependency.
+
+For encoder and backend integration, `Surface.bytes()` returns a borrowed
+read-only view of the exact owned storage, including stride padding.
+`row_bytes()` reports visible `width * 4` bytes separately from `stride`.
 
 ## Install
 
@@ -83,40 +93,27 @@ program as `quickstart.mojo` and run it with
 
 ## A real task
 
-This example flattens a circle, walks its typed path elements, and sends each
-vertex to a stand-in downstream consumer. Replace `_send_to_consumer` with the
-vertex sink for a tessellator, renderer, or file format.
+This example draws a clipped, premultiplied source-over circle into an owned
+surface. `blend_path` uses the full surface; `blend_path_clipped` adds an
+overflow-safe integer clip without introducing global renderer state.
 
 ```mojo
-from kagerou import PathBuilder, Point
-
-
-def _send_to_consumer(x: Float64, y: Float64):
-    print("vertex", x, y)
+from kagerou import PixelRect, PathBuilder, Point, Rgba8, Surface
 
 
 def main() raises:
-    var circle = PathBuilder.circle(Point(100.0, 100.0), 40.0)
-    var polyline = circle.flattened(0.25)
-    var elements = polyline.elements()
-    var vertex_count = 0
-
-    for element in elements:
-        if element.point_count() > 0:
-            var point = element.p0()
-            _send_to_consumer(point.x(), point.y())
-            vertex_count += 1
-
-    var bounds = polyline.bounds()
-    print("vertices:", vertex_count)
-    print(
-        "bounds:",
-        bounds.min_x(),
-        bounds.min_y(),
-        bounds.max_x(),
-        bounds.max_y(),
+    var surface = Surface(200, 160)
+    var circle = PathBuilder.circle(Point(100.0, 80.0), 48.0)
+    var blue = Rgba8(UInt8(16), UInt8(48), UInt8(96), UInt8(128))
+    surface.blend_path_clipped(
+        circle,
+        PixelRect(60, 30, 80, 100),
+        blue,
     )
+    print(surface.pixel(100, 80))
 ```
+
+The expected output is `Rgba8(16, 48, 96, 128)`.
 
 ## Development
 
@@ -126,6 +123,7 @@ Install [Pixi](https://pixi.sh/), then run:
 pixi install --locked
 pixi run check
 pixi run example
+pixi run bench-surface
 ```
 
 The exact stable Mojo compiler and all development dependencies are captured in
@@ -139,7 +137,7 @@ documented.
 - `src/kagerou/`: library or application source
 - `tests/`: TestSuite unit, reference-value, and invariant tests
 - `examples/`: small compilable usage programs
-- `benchmarks/`: reproducible methodology and later benchmark programs
+- `benchmarks/`: reproducible large-surface performance methodology and program
 - `docs/`: architecture, design, compatibility, roadmap, and release policy
 - `conda.recipe/`: local Rattler build recipe
 

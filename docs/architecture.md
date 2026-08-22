@@ -36,6 +36,51 @@ of contract; public `validate()` methods provide an explicit checkpoint when a
 caller performs unusual low-level mutation. Results that can overflow still pass
 through validating constructors so nonfinite state cannot escape.
 
+`Surface` follows the same trust boundary for nonnegative dimensions, byte
+stride, exact owned storage length, and premultiplied `Rgba8` pixels. Public
+pixel reads and writes remain checked. Fill and compositing clip signed integer
+spans before calculating offsets.
+
+Path rendering remains behind `Surface`: curves first use the shared
+device-space flattening contract, then each subpath is implicitly closed into
+directed nonhorizontal edges. A scanline at `y + 0.5` gathers and sorts its
+crossings, groups equal crossings, advances either signed winding or parity,
+and emits half-open horizontal spans. The same half-open rule includes pixel
+centers on top/left boundaries and excludes centers on bottom/right boundaries.
+A separate per-pixel traversal avoids crossing sorting and span emission, but
+intentionally shares flattening and edge interpolation. Explicit expected masks
+independently lock fill-rule, boundary, symmetric extreme diagonals, and an
+asymmetric MAX-to-local apex.
+`PixelRect` is a per-call backend-neutral clip; it intersects with surface
+bounds before coordinate conversion or offset calculation and does not pretend
+to be the unopened transformed clip-stack API.
+
+Empty clips, empty paths, and transparent blend sources return after validating
+the cheap tolerance argument and before flattening or allocating edge/crossing
+storage. `Surface.bytes()` exposes a read-only borrowed span over the exact owned
+storage, including padding; `row_bytes()` distinguishes visible RGBA bytes from
+the byte `stride` used to locate the next row.
+
+The SIMD row loop is a narrow, audited unsafe boundary over an owned
+`List[UInt8]`. Validation and clipping prove each whole-width load/store is
+inside initialized storage before the origin-tracked pointer is created. The
+list is never resized while borrowed, byte alignment is explicit, and the
+pointer does not escape. One-to-three pixel tails use the private bounds-checked
+scalar loop, which remains the semantic reference in exact differential tests.
+An attempted four-channel tail vector was removed after the clean benchmark
+showed it slower than this scalar path.
+
+Native `sample` profiles use separate long-running rectangle-composite and path
+workloads. On the profiled Apple M4 build, the generated 16-byte NEON
+load/widen/multiply/narrow/store loop owns the path workload's dominant samples;
+flattening and allocation are a small minority. This evidence keeps path
+preparation internal and the public API direct. Manual four-vector unrolling was
+rejected after paired measurements showed no meaningful median improvement.
+The retained geometry optimization precomputes ordinary-coordinate edge slopes
+and vertical bounds once. Extreme edges instead retain a scaled leading slope
+plus independently interpolated endpoint residuals, avoiding both overflowing
+differences and a rounded global-intercept assumption.
+
 Affine inversion decomposes each finite binary64 coefficient into its exact
 integer significand and base-two exponent. Products are formed exactly in
 `Int256`; terms are aligned exactly whenever cancellation is possible. A term

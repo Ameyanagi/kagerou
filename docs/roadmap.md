@@ -73,14 +73,33 @@ separate inputs.
 
 ### K3 — Correctness-first software surface
 
-- [ ] **K3.1 Pixel surface:** own dimensions, stride, and checked pixel access
+- [x] **K3.1 Pixel surface:** own dimensions, stride, and checked pixel access
   with explicit overflow and empty-surface behavior.
-- [ ] **K3.2 Coverage rasterizer:** rasterize flattened fills into scalar
+
+  Evidence: `Surface` validates row bytes and total storage before allocation,
+  supports explicit padded stride, checks individual pixel access, and treats
+  zero-sized fill/blend workloads as constant-time no-ops.
+- [x] **K3.2 Coverage rasterizer:** rasterize flattened fills into scalar
   coverage using a documented sampling rule.
-- [ ] **K3.3 Compositing:** implement source-over alpha with reference pixels and
+
+  Evidence: `Surface.fill_path` and `blend_path` flatten curves, implicitly
+  close subpaths, apply nonzero/even-odd winding at pixel centers, and emit
+  deterministic binary-coverage spans. A separate per-pixel traversal checks
+  span emission; explicit expected masks independently verify nested winding,
+  fractional boundaries, and huge diagonal residuals.
+- [x] **K3.3 Compositing:** implement source-over alpha with reference pixels and
   transparent/opaque invariants.
+
+  Evidence: the scalar premultiplied RGBA8 reference locks integer rounding and
+  alpha edge cases; clipped four-pixel SIMD batches and every scalar tail length
+  are tested for exact differential equality. A reproducible 1080p benchmark
+  compares SIMD clears/blends with scalar source-over.
 - [ ] **K3.4 Clip integration:** apply the K2 clip stack and prove all writes stay
   inside checked surface bounds.
+
+  First slice: explicit per-call `PixelRect` clips already intersect every path
+  write with checked surface bounds without endpoint overflow. Transformed
+  stateful clip-stack ownership remains pending with K2.4.
 
 Akari gate: choose a pinned Akari color representation only after Akari's v0.1
 numeric/color-space contract is stable. Until then, rasterizer coverage tests use
@@ -113,6 +132,12 @@ checked surfaces contain every write, and dependency arrows remain sparse.
 - Add reproducible path-flattening, stroke, fill, and compositing benchmarks.
 - Optimize measured scalar bottlenecks while retaining the reference path.
 - Introduce SIMD behind identical geometry, coverage, and compositing contracts.
+
+Current evidence: the surface benchmark reports p50/p95 for clears, rectangle
+source-over, path fill/source-over, narrow tails, and the scalar oracle. Native
+sampling profiles separate full-surface composite work from geometry-aware path
+work. Exact 16-byte SIMD batches and scalar tails retain independent scalar
+differential coverage.
 
 ## v1.0 — Stability
 
