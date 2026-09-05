@@ -3,7 +3,7 @@
 from std.builtin.comparable import Equatable
 from std.collections import List, Optional
 from std.io import Writable, Writer
-from std.math import abs, sqrt
+from std.math import abs, fma, sqrt
 
 from .geometry import (
     AffineTransform,
@@ -20,6 +20,94 @@ from .geometry import (
 comptime _CIRCLE_KAPPA = 0.5522847498307936
 comptime DEFAULT_FLATTEN_TOLERANCE = 0.25  # Device-space units.
 comptime _MAX_FLATTEN_DEPTH = 24
+
+
+struct _AxisBounds(Copyable, ImplicitlyCopyable):
+    var minimum: Float64
+    var maximum: Float64
+
+    def __init__(out self, first: Float64, last: Float64):
+        self.minimum = min(first, last)
+        self.maximum = max(first, last)
+
+    def include(mut self, value: Float64):
+        self.minimum = min(self.minimum, value)
+        self.maximum = max(self.maximum, value)
+
+
+def _bezier_value(
+    p0: Float64,
+    p1: Float64,
+    p2: Float64,
+    p3: Float64,
+    t: Float64,
+    cubic: Bool,
+) -> Float64:
+    # Inputs are normalized to [-1, 1]; convex de Casteljau interpolation
+    # avoids overflowing differences even for opposite-sign finite endpoints.
+    var u = 1.0 - t
+    var a = u * p0 + t * p1
+    var b = u * p1 + t * p2
+    var ab = u * a + t * b
+    if not cubic:
+        return ab
+    var c = u * p2 + t * p3
+    return u * ab + t * (u * b + t * c)
+
+
+def _curve_axis_bounds(
+    p0: Float64,
+    p1: Float64,
+    p2: Float64,
+    p3: Float64,
+    cubic: Bool,
+) -> _AxisBounds:
+    var endpoint = p3 if cubic else p2
+    var result = _AxisBounds(p0, endpoint)
+    var scale = max(abs(p0), max(abs(p1), abs(p2)))
+    if cubic:
+        scale = max(scale, abs(p3))
+    if scale == 0.0:
+        return result
+    var n0 = p0 / scale
+    var n1 = p1 / scale
+    var n2 = p2 / scale
+    var n3 = p3 / scale if cubic else n2
+    var d0 = n1 - n0
+    var d1 = n2 - n1
+    var a = 0.0
+    var b = d1 - d0
+    var c = d0
+    if cubic:
+        var d2 = n3 - n2
+        a = (d2 - d1) - (d1 - d0)
+        b = 2.0 * (d1 - d0)
+    var root0 = -1.0
+    var root1 = -1.0
+    if a == 0.0:
+        if b != 0.0:
+            root0 = -c / b
+    else:
+        var discriminant = fma(b, b, -4.0 * a * c)
+        if discriminant >= 0.0:
+            # The q formulation keeps the small root accurate when b nearly
+            # cancels sqrt(discriminant), including near-linear derivatives.
+            var radical = sqrt(discriminant)
+            var q = -0.5 * (b + (radical if b >= 0.0 else -radical))
+            if q == 0.0:
+                root0 = -b / (2.0 * a)
+            else:
+                root0 = q / a
+                root1 = c / q
+    var hull_min = min(n0, min(n1, min(n2, n3)))
+    var hull_max = max(n0, max(n1, max(n2, n3)))
+    for index in range(2):
+        var t = root0 if index == 0 else root1
+        if t > 0.0 and t < 1.0:
+            var value = _bezier_value(n0, n1, n2, n3, t, cubic)
+            # Rounding must not exceed the finite control hull on rescaling.
+            result.include(min(hull_max, max(hull_min, value)) * scale)
+    return result
 
 
 struct PathVerb(Copyable, Equatable, ImplicitlyCopyable, Writable):
@@ -409,6 +497,63 @@ struct Path(Copyable, Equatable, Movable, Writable):
             max_x = max(max_x, self._coordinates[index])
             max_y = max(max_y, self._coordinates[index + 1])
         return Rect(min_x, min_y, max_x, max_y)
+
+    def control_bounds(self) raises -> Rect:
+        """Return the conservative control box; explicit alias for ``bounds``."""
+        return self.bounds()
+
+    def tight_bounds(self) raises -> Rect:
+        """Bound endpoints and analytic quadratic/cubic coordinate extrema.
+
+        Unlike ``bounds``/``control_bounds``, off-curve controls are excluded.
+        Roots and evaluation use Float64 arithmetic, not a geometric tolerance;
+        results are tight to floating-point rounding, not outward-rounded
+        interval guarantees. Empty paths raise just as ``bounds`` does.
+        Traversal is O(verbs) with constant temporary storage.
+        """
+        if self.is_empty():
+            raise Error(
+                "path bounds are undefined for an empty path: add a subpath first"
+            )
+        var x_bounds = _AxisBounds(self._coordinates[0], self._coordinates[0])
+        var y_bounds = _AxisBounds(self._coordinates[1], self._coordinates[1])
+        var current_x = self._coordinates[0]
+        var current_y = self._coordinates[1]
+        var index = 0
+        for verb in self._verbs:
+            var count = verb.point_count()
+            if count == 1:
+                current_x = self._coordinates[index]
+                current_y = self._coordinates[index + 1]
+                x_bounds.include(current_x)
+                y_bounds.include(current_y)
+            elif count >= 2:
+                var cubic = count == 3
+                var end = index + 2 * (count - 1)
+                var bx = _curve_axis_bounds(
+                    current_x,
+                    self._coordinates[index],
+                    self._coordinates[index + 2],
+                    self._coordinates[end],
+                    cubic,
+                )
+                var by = _curve_axis_bounds(
+                    current_y,
+                    self._coordinates[index + 1],
+                    self._coordinates[index + 3],
+                    self._coordinates[end + 1],
+                    cubic,
+                )
+                x_bounds.include(bx.minimum)
+                x_bounds.include(bx.maximum)
+                y_bounds.include(by.minimum)
+                y_bounds.include(by.maximum)
+                current_x = self._coordinates[end]
+                current_y = self._coordinates[end + 1]
+            index += 2 * count
+        return Rect(
+            x_bounds.minimum, y_bounds.minimum, x_bounds.maximum, y_bounds.maximum
+        )
 
     def __eq__(self, other: Self) -> Bool:
         if len(self._verbs) != len(other._verbs):

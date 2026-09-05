@@ -38,11 +38,10 @@ or Sen.
   close commands as nominal values with finite coordinates.
 - [x] **K1.2 Path builder:** enforce a valid current-point/subpath state and
   reject drawing commands before the first move.
-- [ ] **K1.3 Bounds:** compute conservative scalar path bounds, followed by exact
-  Bézier-extrema bounds as a separately reviewed issue.
-
-  Note: conservative control-box bounds have landed; exact Bézier-extrema bounds
-  remain open.
+- [x] **K1.3 Bounds:** retain conservative `bounds`/`control_bounds` and add
+  analytic Bézier-extrema `tight_bounds`. Normalized derivative roots handle
+  degeneracy, near-linear coefficients, and huge finite coordinates; dense
+  independent Bernstein samples and known extrema verify the result.
 - [x] **K1.4 Flattening:** convert curves to line segments under an explicit
   device-space tolerance with deterministic termination tests.
 
@@ -84,7 +83,10 @@ separate inputs.
 
   Evidence: `Surface.fill_path` and `blend_path` flatten curves, implicitly
   close subpaths, apply nonzero/even-odd winding at pixel centers, and emit
-  deterministic binary-coverage spans. A separate per-pixel traversal checks
+  deterministic binary-coverage spans or 2–16 centered samples per axis.
+  Independent analytic masks cover translated diagonals, circles, tiny curves,
+  clipping, and both fill rules. Visual examples and quality/cost benchmarks
+  document the sampling/flattening tradeoff. A separate per-pixel traversal checks
   span emission; explicit expected masks independently verify nested winding,
   fractional boundaries, and huge diagonal residuals.
 - [x] **K3.3 Compositing:** implement source-over alpha with reference pixels and

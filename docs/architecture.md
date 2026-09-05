@@ -43,7 +43,7 @@ spans before calculating offsets.
 
 Path rendering remains behind `Surface`: curves first use the shared
 device-space flattening contract, then each subpath is implicitly closed into
-directed nonhorizontal edges. A scanline at `y + 0.5` gathers and sorts its
+directed nonhorizontal edges. The default scanline at `y + 0.5` gathers and sorts its
 crossings, groups equal crossings, advances either signed winding or parity,
 and emits half-open horizontal spans. The same half-open rule includes pixel
 centers on top/left boundaries and excludes centers on bottom/right boundaries.
@@ -56,10 +56,18 @@ bounds before coordinate conversion or offset calculation and does not pretend
 to be the unopened transformed clip-stack API.
 
 Empty clips, empty paths, and transparent blend sources return after validating
-the cheap tolerance argument and before flattening or allocating edge/crossing
+the cheap tolerance and sampling arguments and before flattening or allocating edge/crossing
 storage. `Surface.bytes()` exposes a read-only borrowed span over the exact owned
 storage, including padding; `row_bytes()` distinguishes visible RGBA bytes from
 the byte `stride` used to locate the next row.
+
+Fractional coverage reuses directed edges and sorted scanlines at N subpixel
+heights. Each filled interval contributes sample counts to a single clipped row,
+then equal-coverage runs share the existing compositor. The UInt16 row does not
+grow with N or surface height; the public limit of 16 samples per axis keeps
+counts at or below 256. Analytic shape masks independently verify this path.
+Tight path bounds are a separate allocation-free traversal over endpoints and
+normalized derivative roots; the original control-box query remains available.
 
 The SIMD row loop is a narrow, audited unsafe boundary over an owned
 `List[UInt8]`. Validation and clipping prove each whole-width load/store is
@@ -71,7 +79,7 @@ An attempted four-channel tail vector was removed after the clean benchmark
 showed it slower than this scalar path.
 
 Native `sample` profiles use separate long-running rectangle-composite and path
-workloads. On the profiled Apple M4 build, the generated 16-byte NEON
+workloads in binary coverage mode. On the profiled Apple M4 build, the generated 16-byte NEON
 load/widen/multiply/narrow/store loop owns the path workload's dominant samples;
 flattening and allocation are a small minority. This evidence keeps path
 preparation internal and the public API direct. Manual four-vector unrolling was

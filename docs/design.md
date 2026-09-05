@@ -50,7 +50,7 @@ approximations, which have an explicit device-space error budget.
 | Winding and fill-rule selection | Exact |
 | Rectangle edge ordering | Exact |
 | Curve flattening distance | Approximate with an explicit tolerance |
-| Bézier-extrema roots (later slice) | Approximate with an explicit tolerance |
+| Bézier-extrema bounds | Analytic Float64 roots/evaluation, subject to rounding |
 
 `DEFAULT_FLATTEN_TOLERANCE = 0.25` device units is the named default. Following
 kurbo's convention, flattening tolerance is the maximum distance in device
@@ -58,8 +58,9 @@ space between the true curve and its polyline approximation. Under midpoint
 subdivision the flatness bound shrinks fourfold per level, so segment count
 scales approximately as `1 / sqrt(tolerance)` for quadratics and cubics
 alike. The default of 0.25 is the
-right practical choice for antialiased output; use a smaller value only for
-high-precision export.
+economical default for coarse output. Fine coverage grids need a smaller
+flattening tolerance (for example 0.01), or geometry error dominates the
+additional coverage samples; see the coverage benchmark.
 
 API naming communicates ownership: past-participle methods return new values
 (`translated`, `inverted`, `transformed`, `flattened`, `inflated`), while
@@ -123,14 +124,74 @@ Ordinary-coordinate edges precompute their vertical bounds and `dx / dy` once,
 so scanlines perform comparisons and a multiply-add rather than repeated
 min/max and division.
 
-Coverage is currently binary: a covered pixel receives full source coverage.
-Antialiasing may refine coverage values later without changing path winding,
-edge ownership, clipping, or compositing semantics. A slow per-pixel traversal
+Binary coverage remains the default and its implementation is unchanged. A slow per-pixel traversal
 checks optimized crossing sorting and span emission, while sharing the same
 flattened edges and interpolation. Full explicit masks independently check both
 fill rules, edge ownership, clipping, symmetric extreme `x = y` diagonals, and
 an asymmetric MAX-to-local apex; the scalar compositor independently checks
 SIMD batches and tails.
+
+## Fractional path coverage
+
+All four public path fill/blend methods accept trailing `samples_per_axis: Int`
+(default 1). Values outside `[1, 16]` raise, including on empty paths and
+transparent sources. `1` selects the existing binary scanline implementation;
+`N > 1` samples the regular N by N grid
+`(x + (sx + 0.5)/N, y + (sy + 0.5)/N)` for `sx,sy` in `[0,N)`.
+Each sample uses the same half-open edge and fill-rule contract. Coverage is
+`k / (N*N)`, where k counts inside samples after winding/parity evaluation.
+This is supersampling, not exact analytic area; features between every sample
+can disappear. Curve flattening still uses the independent `tolerance` argument.
+Integer `PixelRect` clipping masks whole pixels, so its borders stay hard.
+
+Premultiplied RGBA8 compositing is explicit, with nearest-integer rounding
+(ties upward):
+
+- `fill_path`: each channel becomes
+  `round((source*k + destination*(N*N-k))/(N*N))`. This is masked overwrite;
+  transparent fill erases only the covered fraction.
+- `blend_path`: first scale every source channel, including alpha, to
+  `round(source*k/(N*N))`, then apply the existing byte source-over formula.
+  This two-stage quantization is intentional and tested at every 1/256 step.
+  Transparent source is identity, and full coverage matches binary compositing.
+
+The monotone channel operations preserve `RGB <= alpha`. Accumulating coverage
+before compositing avoids repeated alpha accumulation on one pixel. Adjacent
+pixels with equal coverage share a span; full fill spans and all blend spans use
+the existing SIMD compositor, retaining its scalar tails.
+
+Storage is bounded by the clipped width and flattened path: one UInt16 count
+per clipped pixel in a **single row**, plus at most one crossing per edge.
+N is capped at 16, so counts cannot exceed 256. There is no supersampled surface
+or allocation proportional to height or N squared. Existing flattening storage
+and its depth-24 termination cap are unchanged. Empty geometry/clips return
+before row allocation. Runtime is roughly linear in N times scanline/edge and
+span work; crossing insertion sort retains the existing architecture.
+
+## Tight path bounds
+
+`bounds()` retains its original control-box behavior; `control_bounds()` names
+that fast conservative operation explicitly. `tight_bounds()` visits endpoints
+and each coordinate's interior derivative roots, excluding off-curve controls.
+It walks the SoA streams directly in O(verbs) time with constant extra storage.
+Closing lines need no additional extrema; subpath endpoints are already included.
+
+Quadratic derivatives reduce to a line. Cubic derivative coefficients are
+formed from normalized adjacent control differences, with an exact linear
+fallback for zero quadratic coefficient. The stable quadratic `q` formula
+avoids subtracting nearly equal square roots, so near-linear cases keep their
+small root without an arbitrary epsilon that could discard real extrema.
+Double roots and endpoint roots are handled explicitly. Coordinate normalization
+avoids overflow in differences/discriminants, and normalized de Casteljau
+interpolation stays in the control hull before rescaling.
+
+Results are tight to Float64 rounding; they are not outward-rounded interval
+bounds. Use `control_bounds()` when a formally conservative control hull is
+required. Both operations reject an empty path and follow `Rect`'s existing
+requirement that computed extents are finite. Tests include a quadratic whose
+control box has height 2 and actual height 1, both cubic extrema, constant and
+near-linear curves, stationary double roots, translated/rotated paths, and
+huge/subnormal coordinates plus 81 independently sampled cubic configurations.
 
 ## Out of scope
 
