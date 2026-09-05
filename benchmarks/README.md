@@ -67,3 +67,10 @@ measured 24.70 ns per three-pixel span versus 21.10 ns for the scalar oracle.
 
 Results are development evidence, not permanent marketing claims. Rerun on the
 target platform; do not generalize one machine's throughput.
+
+## Fractional path coverage
+
+`pixi run --locked bench-coverage` compares the original binary mode with 2, 4,
+8, and 16 samples per axis at two flattening tolerances. See the
+[quality/cost methodology and measured results](coverage.md), independent circle
+reference, raw CSV, and generated visual comparison.

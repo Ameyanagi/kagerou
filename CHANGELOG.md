@@ -5,6 +5,14 @@ and uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Add caller-controlled fractional path coverage (1–16 samples per axis), with
+  documented masked overwrite and premultiplied source-over rounding, bounded
+  row storage, independent mask regressions, visual examples, and benchmarks.
+- Add `Path.tight_bounds()` for analytic Bézier extrema and `control_bounds()`
+  as an explicit alias for the unchanged conservative `bounds()` method.
+
 ## [0.1.0] - 2026-08-22
 
 ### Added

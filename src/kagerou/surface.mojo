@@ -320,6 +320,37 @@ def _validate_raster_tolerance(tolerance: Float64) raises:
         )
 
 
+def _validate_samples(samples_per_axis: Int) raises:
+    if samples_per_axis < 1 or samples_per_axis > 16:
+        raise Error(
+            String(
+                "samples_per_axis must be within [1, 16]; got ",
+                samples_per_axis,
+                "; use 1 for binary coverage or 4/8/16 for antialiasing",
+            )
+        )
+
+
+def _first_subsample(boundary: Float64, x: Int, samples: Int) -> Int:
+    # Clamp in floating point before converting; off-screen finite coordinates
+    # must never overflow an Int. A single pixel keeps all arithmetic bounded.
+    var local = (boundary - Float64(x)) * Float64(samples) - 0.5
+    if local <= 0.0:
+        return 0
+    if local >= Float64(samples):
+        return samples
+    return Int(ceil(local))
+
+
+def _masked_channel(
+    source: UInt8, destination: UInt8, covered: Int, total: Int
+) -> UInt8:
+    return UInt8(
+        (Int(source) * covered + Int(destination) * (total - covered) + total // 2)
+        // total
+    )
+
+
 def _clip_is_empty(
     clip: PixelRect,
     surface_width: Int,
@@ -819,13 +850,17 @@ struct Surface(Equatable):
         pixel: Rgba8,
         fill_rule: FillRule = FillRule.NONZERO,
         tolerance: Float64 = DEFAULT_FLATTEN_TOLERANCE,
+        samples_per_axis: Int = 1,
     ) raises:
-        """Rasterize a path with binary pixel-center coverage and overwrite it.
+        """Rasterize a path with caller-selected coverage and masked overwrite.
 
         Curves are flattened at ``tolerance``. Open subpaths close implicitly.
         Vertical edge intervals and filled horizontal intervals are half-open:
         pixel centers on a top/left boundary are included and centers on a
-        bottom/right boundary are excluded.
+        bottom/right boundary are excluded. ``samples_per_axis=1`` retains
+        binary coverage. Values 2..16 sample an N by N centered regular grid.
+        Fractional fill interpolates source and destination by coverage, even
+        for transparent source; blend uses coverage-scaled source-over.
         """
         self.fill_path_clipped(
             path,
@@ -833,6 +868,7 @@ struct Surface(Equatable):
             pixel,
             fill_rule,
             tolerance,
+            samples_per_axis,
         )
 
     def fill_path_clipped(
@@ -842,13 +878,22 @@ struct Surface(Equatable):
         pixel: Rgba8,
         fill_rule: FillRule = FillRule.NONZERO,
         tolerance: Float64 = DEFAULT_FLATTEN_TOLERANCE,
+        samples_per_axis: Int = 1,
     ) raises:
         """Overwrite path-covered pixels inside ``clip`` and the surface."""
         _validate_raster_tolerance(tolerance)
+        _validate_samples(samples_per_axis)
         if path.is_empty() or _clip_is_empty(clip, self._width, self._height):
             return
         var edges = _path_edges(path, tolerance)
-        self._rasterize_scanlines(Span(edges), clip, pixel, fill_rule, composite=False)
+        if samples_per_axis == 1:
+            self._rasterize_scanlines(
+                Span(edges), clip, pixel, fill_rule, composite=False
+            )
+        else:
+            self._rasterize_coverage(
+                Span(edges), clip, pixel, fill_rule, samples_per_axis, composite=False
+            )
 
     def blend_path(
         mut self,
@@ -856,6 +901,7 @@ struct Surface(Equatable):
         source: Rgba8,
         fill_rule: FillRule = FillRule.NONZERO,
         tolerance: Float64 = DEFAULT_FLATTEN_TOLERANCE,
+        samples_per_axis: Int = 1,
     ) raises:
         """Rasterize and source-over composite a path over the full surface."""
         self.blend_path_clipped(
@@ -864,6 +910,7 @@ struct Surface(Equatable):
             source,
             fill_rule,
             tolerance,
+            samples_per_axis,
         )
 
     def blend_path_clipped(
@@ -873,15 +920,141 @@ struct Surface(Equatable):
         source: Rgba8,
         fill_rule: FillRule = FillRule.NONZERO,
         tolerance: Float64 = DEFAULT_FLATTEN_TOLERANCE,
+        samples_per_axis: Int = 1,
     ) raises:
         """Rasterize and source-over path pixels inside ``clip``."""
         _validate_raster_tolerance(tolerance)
+        _validate_samples(samples_per_axis)
         if source._alpha == UInt8(0):
             return
         if path.is_empty() or _clip_is_empty(clip, self._width, self._height):
             return
         var edges = _path_edges(path, tolerance)
-        self._rasterize_scanlines(Span(edges), clip, source, fill_rule, composite=True)
+        if samples_per_axis == 1:
+            self._rasterize_scanlines(
+                Span(edges), clip, source, fill_rule, composite=True
+            )
+        else:
+            self._rasterize_coverage(
+                Span(edges), clip, source, fill_rule, samples_per_axis, composite=True
+            )
+
+    def _rasterize_coverage(
+        mut self,
+        edges: Span[_Edge, _],
+        clip: PixelRect,
+        pixel: Rgba8,
+        fill_rule: FillRule,
+        samples: Int,
+        *,
+        composite: Bool,
+    ):
+        var clipped_x = _clip_interval(clip._x, clip._width, self._width)
+        var clipped_y = _clip_interval(clip._y, clip._height, self._height)
+        if clipped_x.length == 0 or clipped_y.length == 0 or len(edges) == 0:
+            return
+        var x_end = clipped_x.start + clipped_x.length
+        var y_end = clipped_y.start + clipped_y.length
+        var min_y = edges[0].min_y
+        var max_y = edges[0].max_y
+        for edge in edges:
+            min_y = min(min_y, edge.min_y)
+            max_y = max(max_y, edge.max_y)
+        # The first bound may include one extra row; it never drops coverage.
+        var first_row = _first_pixel_center_at_or_after(
+            min_y - 0.5, clipped_y.start, y_end
+        )
+        var row_end = _first_pixel_center_at_or_after(
+            max_y + 0.5, clipped_y.start, y_end
+        )
+        if first_row >= row_end:
+            return
+        var counts = List[UInt16](length=clipped_x.length, fill=UInt16(0))
+        var crossings = List[_Crossing](capacity=len(edges))
+        var total = samples * samples
+        for y in range(first_row, row_end):
+            for x in range(len(counts)):
+                counts[x] = UInt16(0)
+            for sy in range(samples):
+                crossings.clear()
+                var sample_y = Float64(y) + (Float64(sy) + 0.5) / Float64(samples)
+                for edge in edges:
+                    if _edge_crosses(edge, sample_y):
+                        crossings.append(
+                            _Crossing(_edge_crossing_x(edge, sample_y), edge.winding)
+                        )
+                _sort_crossings(crossings)
+                var winding = 0
+                var index = 0
+                var previous_x = 0.0
+                while index < len(crossings):
+                    var crossing_x = crossings[index].x
+                    if _is_inside(winding, fill_rule):
+                        var first = _first_pixel_center_at_or_after(
+                            previous_x - 0.5, clipped_x.start, x_end
+                        )
+                        var end = _first_pixel_center_at_or_after(
+                            crossing_x + 0.5, clipped_x.start, x_end
+                        )
+                        for x in range(first, end):
+                            var covered = _first_subsample(
+                                crossing_x, x, samples
+                            ) - _first_subsample(previous_x, x, samples)
+                            counts[x - clipped_x.start] += UInt16(covered)
+                    while index < len(crossings) and crossings[index].x == crossing_x:
+                        winding += crossings[index].winding
+                        index += 1
+                    previous_x = crossing_x
+            var x = clipped_x.start
+            while x < x_end:
+                var covered = Int(counts[x - clipped_x.start])
+                var end = x + 1
+                while end < x_end and Int(counts[end - clipped_x.start]) == covered:
+                    end += 1
+                var offset = self._offset(x, y)
+                if covered == 0:
+                    x = end
+                    continue
+                if composite:
+                    var source = Rgba8._from_validated(
+                        _masked_channel(pixel._red, UInt8(0), covered, total),
+                        _masked_channel(pixel._green, UInt8(0), covered, total),
+                        _masked_channel(pixel._blue, UInt8(0), covered, total),
+                        _masked_channel(pixel._alpha, UInt8(0), covered, total),
+                    )
+                    self._blend_contiguous(offset, end - x, source)
+                elif covered == total:
+                    self._fill_contiguous(offset, end - x, pixel)
+                else:
+                    for current in range(x, end):
+                        var target = self._offset(current, y)
+                        self._store_pixel(
+                            target,
+                            Rgba8._from_validated(
+                                _masked_channel(
+                                    pixel._red, self._pixels[target], covered, total
+                                ),
+                                _masked_channel(
+                                    pixel._green,
+                                    self._pixels[target + 1],
+                                    covered,
+                                    total,
+                                ),
+                                _masked_channel(
+                                    pixel._blue,
+                                    self._pixels[target + 2],
+                                    covered,
+                                    total,
+                                ),
+                                _masked_channel(
+                                    pixel._alpha,
+                                    self._pixels[target + 3],
+                                    covered,
+                                    total,
+                                ),
+                            ),
+                        )
+                x = end
 
     def _rasterize_scanlines(
         mut self,

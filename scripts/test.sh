@@ -8,3 +8,5 @@ done
 mkdir -p .pixi/test-bin
 mojo build -I src examples/basic.mojo -o .pixi/test-bin/basic
 mojo build -I src examples/flatten_curve.mojo -o .pixi/test-bin/flatten-curve
+
+mojo build -I src examples/coverage_gallery.mojo -o .pixi/test-bin/coverage-gallery

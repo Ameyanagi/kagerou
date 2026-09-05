@@ -6,6 +6,8 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 version = "0.1.0"
 
 [tasks]
+bench-coverage = { cmd = "mojo run -O3 -I src benchmarks/bench_coverage.mojo", description = "Measure regular-grid coverage quality and cost" }
+example-coverage = { cmd = "mojo run -O3 -I src examples/coverage_gallery.mojo", description = "Print a self-contained SVG comparing coverage quality" }
 bench-surface = { cmd = "mojo run -O3 -I src benchmarks/bench_surface.mojo", description = "Benchmark p50/p95 surface compositing and path rasterization" }
 build-profile-path = { cmd = "mojo build -O3 -I src benchmarks/profile_path.mojo -o .pixi/profile_path", description = "Build the long-running path-raster sampling workload" }
 build-profile-surface = { cmd = "mojo build -O3 -I src benchmarks/profile_surface.mojo -o .pixi/profile_surface", description = "Build the long-running rectangle-composite sampling workload" }

@@ -10,11 +10,11 @@ Kagerou is a renderer rather than a GUI toolkit, window system, plotting
 library, or application framework.
 
 The current implementation milestone provides validated continuous geometry,
-affine transforms, immutable paths, stateful path construction, conservative
+affine transforms, immutable paths, stateful path construction, conservative and tight Bézier
 bounds, deterministic curve flattening, and an owned premultiplied RGBA8
 software surface with clipped solid fills and source-over compositing. Stroke
-geometry, antialiased coverage, and clip stacks follow through later v0.1
-gates. The current binary-coverage path rasterizer supports nonzero/even-odd
+geometry and clip stacks follow through later v0.1 gates. The path rasterizer
+supports binary or caller-selected fractional coverage, nonzero/even-odd
 fills, implicit closure, rectangular pixel clips, and deterministic curves via
 the existing flattening tolerance.
 The project is independently installable and does not require any application
@@ -119,6 +119,8 @@ def main() raises:
         circle,
         PixelRect(60, 30, 80, 100),
         blue,
+        tolerance=0.01,
+        samples_per_axis=8,
     )
     print(surface.pixel(100, 80))
 ```
@@ -157,3 +159,19 @@ and [roadmap](docs/roadmap.md) before proposing a new dependency or feature.
 ## License
 
 Licensed under either Apache-2.0 or MIT, at your option.
+
+## Coverage and bounds
+
+Path rendering defaults to the original binary pixel-center rule. Set
+`samples_per_axis=4`, `8`, or `16` for antialiasing; this controls a centered
+regular grid per pixel. Reduce `tolerance` independently for small curves.
+See the [sampling/compositing contract](docs/design.md#fractional-path-coverage)
+and [measured quality/cost tradeoff](benchmarks/coverage.md).
+
+![Software pixels at increasing coverage quality](docs/images/coverage-gallery.svg)
+
+`Path.bounds()` and its explicit alias `control_bounds()` retain the conservative
+control box. `tight_bounds()` instead evaluates quadratic/cubic interior extrema,
+using constant temporary storage. For a quadratic with y coordinates `(0, 2, 0)`,
+the control box reaches y=2 while the tight bound reaches y=1. Empty paths raise;
+nonempty results follow the finite-coordinate/finite-extent `Rect` contract.
